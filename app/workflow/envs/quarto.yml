@@ -1,0 +1,14 @@
+name: quarto
+channels:
+  - conda-forge
+  - bioconda
+dependencies:
+  - python=3.12
+  - quarto
+  - jupyter
+  - pandas
+  - plotly
+  - python-kaleido
+  - pillow
+
+# can add pheatmap, r-base, deeptools, etc.

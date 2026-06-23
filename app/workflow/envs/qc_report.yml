@@ -1,0 +1,8 @@
+name: qc_report
+channels:
+  - conda-forge
+  - bioconda
+dependencies:
+  - python=3.12
+  - picard=3.4.0
+  - ucsc-gtftogenepred=482

@@ -1,0 +1,50 @@
+# ----------------------------------------------------------------------------
+# Example configuration for the snakemake-rna-seq pipeline.
+# Copy this file, edit the paths/values, and pass it to the pipeline.
+# Paths may be absolute or relative to the directory the pipeline runs in.
+# ----------------------------------------------------------------------------
+
+# Sample sheet: one row per sample with paths to the paired-end FASTQs.
+# Columns: sample, r1, r2   (FASTQs may be .fastq or .fastq.gz)
+samples: example/samples.csv
+
+# Experimental design: maps each sample to a condition.
+# Columns: sample, condition
+design: example/design.csv
+
+# Contrasts to test. Each row produces a "<treatment>_vs_<control>" result
+# in the DESeq2, gene-symbol, GSVA and GSEA steps.
+# Columns: control, treatment
+contrasts: example/contrasts.csv
+
+# Gene sets for GSVA and GSEA: a single column listing GMT file paths.
+# Column: gmt
+gene_sets: example/gene_sets.csv
+
+# Optional: samples to drop before differential expression (e.g. PCA outliers).
+# Columns: sample, stage, reason. Remove this key to disable.
+exclude: example/exclude.csv
+
+# Reports dir: a directory of user-supplied Quarto reports to render last,
+# after the rest of the pipeline finishes. Each report lives one level down as
+# <reports_dir>/<name>/<name>.qmd and renders to results/reports/<name>/<name>.html.
+# Optional: remove this key (or leave it blank) to skip Quarto rendering.
+reports_dir: example/reports
+
+# Genome dir: a directory containing exactly one genome FASTA
+# (.fa/.fasta/.fna) and exactly one annotation GTF (.gtf). Both are
+# auto-detected.
+genome_dir: /path/to/reference
+
+# Low-count gene filter: keep genes with at least `min_count` reads in at
+# least `min_samples` samples.
+filter:
+  min_count: 10
+  min_samples: 3
+
+# Number of CPU cores to use for the pipeline.
+cores: 8
+
+# Output locations (created if missing).
+results_dir: results
+logs_dir: logs

@@ -1,0 +1,8 @@
+name: gsea
+channels:
+  - conda-forge
+  - bioconda
+dependencies:
+  - bioconductor-fgsea=1.36.2
+  - r-optparse=1.8.2
+  - r-base=4.5.3

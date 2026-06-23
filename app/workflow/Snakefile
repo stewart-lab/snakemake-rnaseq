@@ -1,0 +1,840 @@
+from pathlib import Path
+import os
+from glob import glob
+import re
+import pandas as pd
+
+configfile: "config.yaml"
+
+# read inputs from config
+RESULTS =             (config["results_dir"] + "/").replace("//", "/")
+LOGS =                (config["logs_dir"] + "/").replace("//", "/")
+# reports_dir is optional: omit it (or leave it blank) to skip Quarto rendering.
+REPORTS_DIR =         (config["reports_dir"] + "/").replace("//", "/") if config.get("reports_dir") else ""
+GENOME_DIR =          (config["genome_dir"] + "/").replace("//", "/")
+SAMPLESHEET_CSV_PATH = config["samples"]
+DESIGN_CSV_PATH =      config["design"]
+CONTRASTS_CSV_PATH =   config["contrasts"]
+GENE_SETS_CSV_PATH =   config["gene_sets"]
+CORES =                config["cores"]
+
+# output directories for each step in the pipeline
+STEP_FASTQC_PRE_TRIM_DIR =                RESULTS + "001_fastqc/"
+STEP_FASTP_DIR =                          RESULTS + "002_fastp_trimmed/"
+STEP_FASTQC_POST_TRIM_DIR =               RESULTS + "003_fastqc/"
+STEP_RSEM_DIR =                           RESULTS + "004_rsem/"
+STEP_QC_REPORT_CARDS_DIR =                RESULTS + "005_reports/"
+STEP_MULTIQC_DIR =                        RESULTS + "006_multiqc/"
+STEP_RAW_COUNT_MATRIX_DIR =               RESULTS + "007_raw_counts/"
+STEP_RAW_COUNTS_SAMPLES_DROPPED_DIR =     RESULTS + "008_raw_counts_samples_dropped/"
+STEP_RAW_COUNTS_LOW_COUNTS_FILTERED_DIR = RESULTS + "009_raw_counts_filtered/"
+STEP_PCA_ALL_SAMPLES_DIR =                RESULTS + "010_pca/"
+STEP_PCA_SAMPLES_DROPPED_DIR =            RESULTS + "011_pca_samples_dropped/"
+STEP_DESEQ2_DIR =                         RESULTS + "012_deseq2/"
+STEP_GENE_SYMBOLS_DIR =                   RESULTS + "013_deseq2_gene_symbols/"
+STEP_GSVA_DIR =                           RESULTS + "014_gsva/"
+STEP_GSEA_DIR =                           RESULTS + "015_gsea/"
+STEP_PROSE_DIR =                          RESULTS + "016_prose/"
+STEP_QUARTO_DIR =                         RESULTS + "reports/"
+
+# directories for built references
+STEP_RSEM_REFERENCE_DIR =    GENOME_DIR + "star_reference/"
+STEP_PICARD_REFERENCE_DIR =  GENOME_DIR + "picard_reference/"
+
+
+
+
+
+samples_df = pd.read_csv(SAMPLESHEET_CSV_PATH).set_index("sample", drop=False)
+SAMPLES = samples_df["sample"].tolist()
+
+CONTRASTS = pd.read_csv(CONTRASTS_CSV_PATH)
+CONTRAST_NAMES = [
+    f"{row.treatment}_vs_{row.control}"
+    for row in CONTRASTS.itertuples()
+]
+# DESeq2 outputs that get converted to gene symbols (everything but size factors).
+DESEQ_SYMBOL_FILES = ["normalized_counts"] + CONTRAST_NAMES
+# Unique control conditions; each gets its own PCA (control + its treatments).
+CONTROL_CONDITIONS = sorted(CONTRASTS["control"].unique().tolist())
+
+# Gene sets for GSVA: each row of gene_sets.csv points to a GMT file.
+GENE_SETS = pd.read_csv(GENE_SETS_CSV_PATH)
+GMT_FILES = GENE_SETS["gmt"].tolist() if "gmt" in GENE_SETS.columns else GENE_SETS.iloc[:, 0].tolist()
+
+EXCLUDE = pd.read_csv(config["exclude"]) if config.get("exclude") else pd.DataFrame(columns=["sample", "reason"])
+
+
+
+# The reference FASTA and GTF are auto-detected from the genome_dir, which must
+# contain exactly one FASTA (.fa/.fasta/.fna) and exactly one GTF (.gtf).
+def _get_reference_file(directory, extensions, label):
+    matches = sorted({
+        f
+        for ext in extensions
+        for f in glob(os.path.join(directory, "*" + ext))
+    })
+    if len(matches) != 1:
+        raise ValueError(
+            f"Expected exactly one {label} file in genome_dir '{directory}', "
+            f"but found {len(matches)}: {matches or 'none'}"
+        )
+    return matches[0]
+
+GENOME_FASTA = _get_reference_file(GENOME_DIR, (".fa", ".fasta", ".fna"), "FASTA (.fa/.fasta/.fna)")
+GTF = _get_reference_file(GENOME_DIR, (".gtf",), "GTF (.gtf)")
+
+# Conda envs whose tools report a version for the methods paragraph. Each gets a
+# `versions_<env>` rule that runs the tool's own --version inside that env.
+VERSION_ENVS = [
+    "fastp", "fastqc", "multiqc", "rsem", "star", "tximport",
+    "deseq2", "gsva", "limma", "fgsea"
+]
+
+# discover Quarto .qmd docs (none if reports_dir is unset)
+QMD_FILES = glob(os.path.join(REPORTS_DIR, "**", "*.qmd"), recursive=True) if REPORTS_DIR else []
+QUARTO_HTML_FILES = [STEP_QUARTO_DIR + os.path.basename(os.path.dirname(f)) + "/" + os.path.splitext(os.path.basename(f))[0] + ".html" for f in QMD_FILES]
+
+def get_r1(wildcards):
+    return samples_df.loc[wildcards.sample, "r1"]
+
+def get_r2(wildcards):
+    return samples_df.loc[wildcards.sample, "r2"]
+
+def all_excluded():
+    """All samples listed in the exclude table (any stage), de-duplicated."""
+    return EXCLUDE["sample"].dropna().astype(str).drop_duplicates().tolist()
+
+rule all:
+    input:
+        # The pipeline is wired as a single linear chain: each step takes the
+        # previous step's output as an input (some of those inputs are unused
+        # by the step itself and exist only to order the DAG). methods.md is the
+        # second-to-last node; the user-defined Quarto reports render last,
+        # after methods.md, so requesting both runs the whole pipeline.
+        STEP_QC_REPORT_CARDS_DIR + "report_cards.txt",
+        STEP_PROSE_DIR + "methods.md",
+        QUARTO_HTML_FILES,
+
+############# Step 1: FastQC of raw reads #############
+
+# stage raw reads with gzipped files + sample names. these files are temporary (removed after fastp runs)
+rule stage_raw_reads:
+    input:
+        r1=get_r1,
+        r2=get_r2,
+    output:
+        r1=temp(STEP_FASTQC_PRE_TRIM_DIR + "{sample}_R1.fastq.gz"),
+        r2=temp(STEP_FASTQC_PRE_TRIM_DIR + "{sample}_R2.fastq.gz"),
+    run:
+        import gzip
+        import shutil
+
+        for src, dst in [(input.r1, output.r1), (input.r2, output.r2)]:
+            if src.endswith(".gz"):
+                # Already gzipped: just copy it under the standard name.
+                shutil.copy(src, dst)
+            else:
+                # Plain .fastq: gzip it so the staged copy is always .fastq.gz.
+                with open(src, "rb") as f_in, gzip.open(dst, "wb") as f_out:
+                    shutil.copyfileobj(f_in, f_out)
+
+# run fastqc
+rule fastqc_raw:
+    input:
+        r1=STEP_FASTQC_PRE_TRIM_DIR + "{sample}_R1.fastq.gz",
+        r2=STEP_FASTQC_PRE_TRIM_DIR + "{sample}_R2.fastq.gz",
+    output:
+        r1_html=STEP_FASTQC_PRE_TRIM_DIR + "{sample}_R1_fastqc.html",
+        r1_zip=STEP_FASTQC_PRE_TRIM_DIR + "{sample}_R1_fastqc.zip",
+        r2_html=STEP_FASTQC_PRE_TRIM_DIR + "{sample}_R2_fastqc.html",
+        r2_zip=STEP_FASTQC_PRE_TRIM_DIR + "{sample}_R2_fastqc.zip",
+    params:
+        outdir=STEP_FASTQC_PRE_TRIM_DIR
+    conda:
+        "envs/fastqc.yml"
+    log:
+        LOGS + Path(STEP_FASTQC_PRE_TRIM_DIR).name + "/{sample}.log"
+    shell:
+        """
+        mkdir -p {params.outdir}
+        fastqc -o {params.outdir} --threads 1 {input.r1} {input.r2} &> {log}
+        """
+
+############# Step 2: Fastp trimming #############
+# trimmed .fastq are temporary and are deleted after RSEM has run
+rule fastp:
+    input:
+        r1=STEP_FASTQC_PRE_TRIM_DIR + "{sample}_R1.fastq.gz",
+        r2=STEP_FASTQC_PRE_TRIM_DIR + "{sample}_R2.fastq.gz",
+        r1_html=STEP_FASTQC_PRE_TRIM_DIR + "{sample}_R1_fastqc.html", # not used; only for linear DAG
+    output:
+        r1=temp(STEP_FASTP_DIR + "{sample}_R1.fastq"),
+        r2=temp(STEP_FASTP_DIR + "{sample}_R2.fastq"),
+        html=STEP_FASTP_DIR + "{sample}.fastp.html",
+        json=STEP_FASTP_DIR + "{sample}.fastp.json",
+    conda:
+        "envs/fastp.yml"
+    log:
+        LOGS + Path(STEP_FASTP_DIR).name + "/{sample}.log"
+    shell:
+        """
+        fastp \
+            --in1 {input.r1} \
+            --in2 {input.r2} \
+            --out1 {output.r1} \
+            --out2 {output.r2} \
+            --html {output.html} \
+            --json {output.json} \
+            --thread 1 \
+            --detect_adapter_for_pe \
+            --trim_poly_x \
+            &> {log}
+        """
+
+############# Step 3: FastQC of trimmed reads #############
+rule fastqc_trimmed:
+    input:
+        r1=STEP_FASTP_DIR + "{sample}_R1.fastq",
+        r2=STEP_FASTP_DIR + "{sample}_R2.fastq",
+    output:
+        r1_html=STEP_FASTQC_POST_TRIM_DIR + "{sample}_R1_fastqc.html",
+        r1_zip=STEP_FASTQC_POST_TRIM_DIR + "{sample}_R1_fastqc.zip",
+        r2_html=STEP_FASTQC_POST_TRIM_DIR + "{sample}_R2_fastqc.html",
+        r2_zip=STEP_FASTQC_POST_TRIM_DIR + "{sample}_R2_fastqc.zip",
+    params:
+        outdir=STEP_FASTQC_POST_TRIM_DIR
+    conda:
+        "envs/fastqc.yml"
+    log:
+        LOGS + Path(STEP_FASTQC_POST_TRIM_DIR).name + "/{sample}.log"
+    shell:
+        """
+        mkdir -p {params.outdir}
+        fastqc -o {params.outdir} --threads 1 {input.r1} {input.r2} &> {log}
+        """
+
+############# Step 4: RSEM expression quantification #############
+
+# Build RSEM reference
+rule rsem_prepare_reference:
+    input:
+        fasta=GENOME_FASTA,
+        gtf=GTF,
+    output:
+        # Key files RSEM/STAR produce; their presence marks the index as built.
+        grp=STEP_RSEM_REFERENCE_DIR + "star_reference.grp",
+        ti=STEP_RSEM_REFERENCE_DIR + "star_reference.ti",
+        seq=STEP_RSEM_REFERENCE_DIR + "star_reference.seq",
+        sa=STEP_RSEM_REFERENCE_DIR + "SA",
+        sain=STEP_RSEM_REFERENCE_DIR + "SAindex",
+        genome=STEP_RSEM_REFERENCE_DIR + "Genome",
+    params:
+        ref_prefix=STEP_RSEM_REFERENCE_DIR + "star_reference",
+        outdir=GENOME_DIR
+    threads: 
+        CORES
+    conda:
+        "envs/rsem.yml"
+    log:
+        LOGS + Path(STEP_RSEM_DIR).name + "/rsem_prepare_reference/prepare.log"
+    shell:
+        """
+        mkdir -p {params.outdir}
+        rsem-prepare-reference \
+            --star \
+            -p {threads} \
+            --gtf {input.gtf} \
+            {input.fasta} \
+            {params.ref_prefix} \
+            &> {log}
+        """
+
+# RSEM expression quantification
+rule rsem_calculate_expression:
+    input:
+        r1=STEP_FASTP_DIR + "{sample}_R1.fastq",
+        r2=STEP_FASTP_DIR + "{sample}_R2.fastq",
+        grp=STEP_RSEM_REFERENCE_DIR + "star_reference.grp",
+        sa_index=STEP_RSEM_REFERENCE_DIR + "SAindex",
+        r1_html=STEP_FASTQC_POST_TRIM_DIR + "{sample}_R1_fastqc.html", # not used; only for linear DAG
+    output:
+        genes=STEP_RSEM_DIR + "{sample}.genes.results",
+        isoforms=STEP_RSEM_DIR + "{sample}.isoforms.results",
+        genome_bam=STEP_RSEM_DIR + "{sample}.genome.sorted.bam",
+        star_log=STEP_RSEM_DIR + "{sample}.log",
+    params:
+        ref_prefix=STEP_RSEM_REFERENCE_DIR + "star_reference",
+        out_prefix=STEP_RSEM_DIR + "{sample}",
+        outdir=STEP_RSEM_DIR,
+    threads:
+        CORES
+    conda:
+        "envs/rsem.yml"
+    log:
+        LOGS + Path(STEP_RSEM_DIR).name + "/{sample}.log"
+    shell:
+        """
+        mkdir -p {params.outdir}
+        rsem-calculate-expression \
+            --star \
+            --paired-end \
+            --num-threads {threads} \
+            --star-output-genome-bam \
+            --keep-intermediate-files \
+            {input.r1} {input.r2} \
+            {params.ref_prefix} \
+            {params.out_prefix} \
+            &> {log}
+
+        samtools sort -@ {threads} \
+            -o {output.genome_bam} \
+            {params.out_prefix}.STAR.genome.bam \
+            >> {log} 2>&1
+        rm -f {params.out_prefix}.STAR.genome.bam
+        """
+
+############# Step 5: per-sample QC report card (RSEM/STAR + Picard) #############
+
+# Build all Picard reference files
+rule picard_reference:
+    input:
+        fasta=GENOME_FASTA,
+        gtf=GTF,
+    output:
+        seq_dict=STEP_PICARD_REFERENCE_DIR + "genome.dict",
+        refflat=STEP_PICARD_REFERENCE_DIR + "refFlat.txt",
+        rrna=STEP_PICARD_REFERENCE_DIR + "rRNA.interval_list",
+        rrna_bed=temp(STEP_PICARD_REFERENCE_DIR + "rRNA.bed"),
+    conda:
+        "envs/qc_report.yml"
+    log:
+        LOGS + Path(STEP_QC_REPORT_CARDS_DIR).name + "/picard_reference.log"
+    shell:
+        """
+        picard CreateSequenceDictionary R={input.fasta} O={output.seq_dict} &> {log}
+
+        gtfToGenePred -genePredExt -geneNameAsName2 -ignoreGroupsWithoutExons \
+            {input.gtf} /dev/stdout 2>> {log} \
+          | awk 'BEGIN{{OFS="\\t"}} {{print $12,$1,$2,$3,$4,$5,$6,$7,$8,$9,$10}}' \
+          > {output.refflat}
+
+        python scripts/rrna_bed.py --gtf {input.gtf} --out {output.rrna_bed} 2>> {log}
+        
+        picard BedToIntervalList \
+            I={output.rrna_bed} \
+            O={output.rrna} \
+            SD={output.seq_dict} \
+            &>> {log}
+        """
+
+# Per-sample Picard RNA-seq metrics
+rule picard_metrics:
+    input:
+        bam=STEP_RSEM_DIR + "{sample}.genome.sorted.bam",
+        refflat=STEP_PICARD_REFERENCE_DIR + "refFlat.txt",
+        rrna=STEP_PICARD_REFERENCE_DIR + "rRNA.interval_list",
+    output:
+        rnaseq_metrics=STEP_QC_REPORT_CARDS_DIR + "picard/{sample}.rnaseq_metrics.txt",
+    conda:
+        "envs/qc_report.yml"
+    log:
+        LOGS + Path(STEP_QC_REPORT_CARDS_DIR).name + "/{sample}.picard_metrics.log"
+    shell:
+        """
+        picard CollectRnaSeqMetrics \
+            I={input.bam} \
+            O={output.rnaseq_metrics} \
+            REF_FLAT={input.refflat} \
+            RIBOSOMAL_INTERVALS={input.rrna} \
+            STRAND_SPECIFICITY=NONE \
+            &> {log}
+        """
+
+rule genes_detected_table:
+    input:
+        expand(STEP_RSEM_DIR + "{sample}.genes.results", sample=SAMPLES),
+    output:
+        STEP_QC_REPORT_CARDS_DIR + "csv/genes_detected.csv",
+    log:
+        LOGS + Path(STEP_QC_REPORT_CARDS_DIR).name + "/genes_detected.log"
+    shell:
+        """
+        python scripts/genes_detected.py --out {output} {input} &> {log}
+        """
+
+rule sample_qc_report_card:
+    input:
+        script="scripts/report_card.py",
+        star_log=STEP_RSEM_DIR + "{sample}.log",
+        rnaseq_metrics=STEP_QC_REPORT_CARDS_DIR + "picard/{sample}.rnaseq_metrics.txt",
+        genes_table=STEP_QC_REPORT_CARDS_DIR + "csv/genes_detected.csv",
+    output:
+        STEP_QC_REPORT_CARDS_DIR + "{sample}.report_card.txt",
+    log:
+        LOGS + Path(STEP_QC_REPORT_CARDS_DIR).name + "/{sample}.report_card.log"
+    shell:
+        """
+        python {input.script} \
+            --sample {wildcards.sample} \
+            --star-log {input.star_log} \
+            --rnaseq-metrics {input.rnaseq_metrics} \
+            --genes-table {input.genes_table} \
+            --out {output} \
+            &> {log}
+        """
+
+rule qc_report_card:
+    input:
+        expand(STEP_QC_REPORT_CARDS_DIR + "{sample}.report_card.txt", sample=SAMPLES),
+    output:
+        STEP_QC_REPORT_CARDS_DIR + "report_cards.txt",
+    shell:
+        "cat {input} > {output}"
+
+############# Step 6: Generate MultiQC report #############
+rule multiqc:
+    input:
+        fastqc=expand(
+            STEP_FASTQC_POST_TRIM_DIR + "{sample}_R{read}_fastqc.zip",
+            sample=SAMPLES, read=[1, 2],
+        ),
+        fastp=expand(
+            STEP_FASTP_DIR + "{sample}.fastp.json",
+            sample=SAMPLES,
+        ),
+        rsem=expand(
+            STEP_RSEM_DIR + "{sample}.genes.results",
+            sample=SAMPLES,
+        ),
+        picard=expand(
+            STEP_QC_REPORT_CARDS_DIR + "picard/{sample}.rnaseq_metrics.txt",
+            sample=SAMPLES,
+        ),
+        report_cards=STEP_QC_REPORT_CARDS_DIR + "report_cards.txt", # not used; only for linear DAG
+    output:
+        html=STEP_MULTIQC_DIR + "multiqc_report.html",
+    params:
+        scan_dirs=" ".join([
+            STEP_FASTP_DIR,
+            STEP_FASTQC_POST_TRIM_DIR,
+            STEP_RSEM_DIR,
+            STEP_QC_REPORT_CARDS_DIR + "picard",
+        ]),
+        outdir=STEP_MULTIQC_DIR,
+    conda:
+        "envs/multiqc.yml"
+    log:
+        LOGS + Path(STEP_MULTIQC_DIR).name + "/multiqc.log",
+    shell:
+        """
+        multiqc \
+            --force \
+            --outdir {params.outdir} \
+            --filename multiqc_report.html \
+            {params.scan_dirs} \
+            &> {log}
+        """
+
+############# Step 7: Build raw count matrix #############
+rule tximport:
+    input:
+        genes=expand(STEP_RSEM_DIR + "{sample}.genes.results", sample=SAMPLES),
+        multiqc=STEP_MULTIQC_DIR + "multiqc_report.html", # not used; only for linear DAG
+    output:
+        gene_counts=STEP_RAW_COUNT_MATRIX_DIR + "counts.csv"
+    conda:
+        "envs/tximport.yml"
+    log:
+        LOGS + Path(STEP_RAW_COUNT_MATRIX_DIR).name + "/tximport.log"
+    shell:
+        "Rscript scripts/tximport.R --files \"{input.genes}\" --out {output}"
+
+############# Step 8: Drop excluded samples #############
+rule drop_samples:
+    input:
+        counts=STEP_RAW_COUNT_MATRIX_DIR + "counts.csv",
+        design=DESIGN_CSV_PATH,
+    output:
+        counts=STEP_RAW_COUNTS_SAMPLES_DROPPED_DIR + "counts.csv",
+        design=STEP_RAW_COUNTS_SAMPLES_DROPPED_DIR + "design.csv",
+    params:
+        drop=all_excluded(),
+    log:
+        LOGS + Path(STEP_RAW_COUNTS_SAMPLES_DROPPED_DIR).name + "/drop.log"
+    run:
+        import pandas as pd
+        df = pd.read_csv(input.counts, index_col="feature_id")
+        design = pd.read_csv(input.design, index_col=0)
+        df = df.drop(columns=params.drop, errors="raise")
+        design = design.drop(index=params.drop, errors="raise")
+        df.to_csv(output.counts)
+        design.to_csv(output.design)
+
+############# Step 9: Remove low-count genes #############
+# Applies the same min-count/min-samples gene filter to both the original
+# (all-samples) count matrix and the samples-dropped count matrix.
+rule filter_counts:
+    input:
+        counts_all=STEP_RAW_COUNT_MATRIX_DIR + "counts.csv",
+        design_all=DESIGN_CSV_PATH,
+        counts_dropped=STEP_RAW_COUNTS_SAMPLES_DROPPED_DIR + "counts.csv",
+        design_dropped=STEP_RAW_COUNTS_SAMPLES_DROPPED_DIR + "design.csv",
+        contrasts=CONTRASTS_CSV_PATH,
+    output:
+        counts_all=STEP_RAW_COUNTS_LOW_COUNTS_FILTERED_DIR + "counts_all_samples.csv",
+        counts_dropped=STEP_RAW_COUNTS_LOW_COUNTS_FILTERED_DIR + "counts_samples_dropped.csv",
+        design_all=STEP_RAW_COUNTS_LOW_COUNTS_FILTERED_DIR + "design_all_samples.csv",
+        design_dropped=STEP_RAW_COUNTS_LOW_COUNTS_FILTERED_DIR + "design_samples_dropped.csv",
+        contrasts=STEP_RAW_COUNTS_LOW_COUNTS_FILTERED_DIR + "contrasts.csv",
+    params:
+        min_count=config["filter"]["min_count"],
+        min_samples=config["filter"]["min_samples"],
+    log:
+        LOGS + Path(STEP_RAW_COUNTS_LOW_COUNTS_FILTERED_DIR).name + "/filter.log"
+    run:
+        import pandas as pd, shutil
+
+        def filter_genes(counts_path, out_path):
+            df = pd.read_csv(counts_path, index_col="feature_id")
+            keep = (df >= params.min_count).sum(axis=1) >= params.min_samples
+            df[keep].to_csv(out_path)
+
+        filter_genes(input.counts_all, output.counts_all)
+        filter_genes(input.counts_dropped, output.counts_dropped)
+
+        pd.read_csv(input.design_all, index_col=0).to_csv(output.design_all)
+        pd.read_csv(input.design_dropped, index_col=0).to_csv(output.design_dropped)
+        shutil.copy(input.contrasts, output.contrasts)
+
+############# Step 10: VSN + PCA + clustermap, all samples #############
+rule pca_clustermap_all:
+    input:
+        counts=STEP_RAW_COUNTS_LOW_COUNTS_FILTERED_DIR + "counts_all_samples.csv",
+        design=STEP_RAW_COUNTS_LOW_COUNTS_FILTERED_DIR + "design_all_samples.csv",
+        contrasts=STEP_RAW_COUNTS_LOW_COUNTS_FILTERED_DIR + "contrasts.csv",
+    output:
+        vst=STEP_PCA_ALL_SAMPLES_DIR + "vst_matrix.csv",
+        pca=STEP_PCA_ALL_SAMPLES_DIR + "pca.html",
+        pca_png=STEP_PCA_ALL_SAMPLES_DIR + "pca.png",
+        pca_groups=expand(STEP_PCA_ALL_SAMPLES_DIR + "pca_{control}.html", control=CONTROL_CONDITIONS),
+        pca_groups_png=expand(STEP_PCA_ALL_SAMPLES_DIR + "pca_{control}.png", control=CONTROL_CONDITIONS),
+        clustermap=STEP_PCA_ALL_SAMPLES_DIR + "clustermap.png",
+    params:
+        outdir=STEP_PCA_ALL_SAMPLES_DIR,
+    conda:
+        "envs/pca_clustermap.yml"
+    log:
+        LOGS + Path(STEP_PCA_ALL_SAMPLES_DIR).name + "/qc.log"
+    shell:
+        """
+        Rscript scripts/vst_matrix.R \
+            --counts {input.counts} \
+            --out {output.vst} \
+            &> {log}
+
+        python scripts/pca_plotly.py \
+            --vst {output.vst} \
+            --design {input.design} \
+            --contrasts {input.contrasts} \
+            --outdir {params.outdir} \
+            >> {log} 2>&1
+
+        Rscript scripts/sample_clustermap.R \
+            --counts {input.counts} \
+            --design {input.design} \
+            --out {output.clustermap} \
+            >> {log} 2>&1
+        """
+
+############# Step 11: VSN + PCA + clustermap, samples dropped #############
+rule pca_clustermap_dropped:
+    input:
+        counts=STEP_RAW_COUNTS_LOW_COUNTS_FILTERED_DIR + "counts_samples_dropped.csv",
+        design=STEP_RAW_COUNTS_LOW_COUNTS_FILTERED_DIR + "design_samples_dropped.csv",
+        contrasts=STEP_RAW_COUNTS_LOW_COUNTS_FILTERED_DIR + "contrasts.csv",
+        pca_all=STEP_PCA_ALL_SAMPLES_DIR + "clustermap.png", # not used; only for linear DAG
+    output:
+        vst=STEP_PCA_SAMPLES_DROPPED_DIR + "vst_matrix.csv",
+        pca=STEP_PCA_SAMPLES_DROPPED_DIR + "pca.html",
+        pca_png=STEP_PCA_SAMPLES_DROPPED_DIR + "pca.png",
+        pca_groups=expand(STEP_PCA_SAMPLES_DROPPED_DIR + "pca_{control}.html", control=CONTROL_CONDITIONS),
+        pca_groups_png=expand(STEP_PCA_SAMPLES_DROPPED_DIR + "pca_{control}.png", control=CONTROL_CONDITIONS),
+        clustermap=STEP_PCA_SAMPLES_DROPPED_DIR + "clustermap.png",
+    params:
+        outdir=STEP_PCA_SAMPLES_DROPPED_DIR,
+    conda:
+        "envs/pca_clustermap.yml"
+    log:
+        LOGS + Path(STEP_PCA_SAMPLES_DROPPED_DIR).name + "/qc.log"
+    shell:
+        """
+        Rscript scripts/vst_matrix.R \
+            --counts {input.counts} \
+            --out {output.vst} \
+            &> {log}
+
+        python scripts/pca_plotly.py \
+            --vst {output.vst} \
+            --design {input.design} \
+            --contrasts {input.contrasts} \
+            --outdir {params.outdir} \
+            >> {log} 2>&1
+
+        Rscript scripts/sample_clustermap.R \
+            --counts {input.counts} \
+            --design {input.design} \
+            --out {output.clustermap} \
+            >> {log} 2>&1
+        """
+
+############# Step 12: Differential expression analysis with DESeq2 #############
+rule deseq2:
+    input:
+        counts=STEP_RAW_COUNTS_LOW_COUNTS_FILTERED_DIR + "counts_samples_dropped.csv",
+        design=STEP_RAW_COUNTS_LOW_COUNTS_FILTERED_DIR + "design_samples_dropped.csv",
+        contrasts=STEP_RAW_COUNTS_LOW_COUNTS_FILTERED_DIR + "contrasts.csv",
+        pca_dropped=STEP_PCA_SAMPLES_DROPPED_DIR + "clustermap.png", # not used; only for linear DAG
+    output:
+        results=expand(STEP_DESEQ2_DIR + "{contrast}.csv", contrast=CONTRAST_NAMES),
+        norm=STEP_DESEQ2_DIR + "normalized_counts.csv",
+        size_factors=STEP_DESEQ2_DIR + "size_factors.csv",
+    params:
+        outdir=STEP_DESEQ2_DIR,
+    conda:
+        "envs/deseq2.yml"
+    log:
+        LOGS + Path(STEP_DESEQ2_DIR).name + "/deseq2.log"
+    shell:
+        """
+        Rscript scripts/deseq2.R \
+            --counts {input.counts} \
+            --design {input.design} \
+            --contrasts {input.contrasts} \
+            --outdir {params.outdir} \
+            &> {log}
+        """
+
+############# Step 13: Map gene IDs to gene symbols #############
+
+# Parse the gene_name attributes from the GTF using gffutils instead of 
+# relying on a species-specific annotation package (like org.hs.eg.db).
+rule gtf_gene_map:
+    input:
+        gtf=GTF,
+    output:
+        STEP_GENE_SYMBOLS_DIR + "map/gene_map.csv",
+    conda:
+        "envs/gffutils.yml"
+    log:
+        LOGS + Path(STEP_GENE_SYMBOLS_DIR).name + "/gtf_gene_map.log"
+    shell:
+        """
+        python scripts/gtf_gene_map.py --gtf {input.gtf} --out {output} &> {log}
+        """
+
+# populate DESeq2 results with gene symbols
+rule gene_symbols:
+    input:
+        table=STEP_DESEQ2_DIR + "{name}.csv",
+        gene_map=STEP_GENE_SYMBOLS_DIR + "map/gene_map.csv",
+    output:
+        STEP_GENE_SYMBOLS_DIR + "{name}.csv",
+    log:
+        LOGS + Path(STEP_GENE_SYMBOLS_DIR).name + "/{name}.log"
+    shell:
+        """
+        python scripts/gene_symbols.py \
+            --input {input.table} \
+            --map {input.gene_map} \
+            --output {output} \
+            &> {log}
+        """
+
+############# Step 14: GSVA + limma #############
+rule gsva_limma:
+    input:
+        expr=STEP_GENE_SYMBOLS_DIR + "normalized_counts.csv",
+        design=STEP_RAW_COUNTS_LOW_COUNTS_FILTERED_DIR + "design_samples_dropped.csv",
+        contrasts=STEP_RAW_COUNTS_LOW_COUNTS_FILTERED_DIR + "contrasts.csv",
+        gene_sets=GENE_SETS_CSV_PATH,
+        gmts=GMT_FILES,
+    output:
+        scores=STEP_GSVA_DIR + "gsva_scores.csv",
+        results=expand(STEP_GSVA_DIR + "{contrast}.csv", contrast=CONTRAST_NAMES),
+    params:
+        outdir=STEP_GSVA_DIR,
+    conda:
+        "envs/gsva_limma.yml"
+    log:
+        LOGS + Path(STEP_GSVA_DIR).name + "/gsva_limma.log"
+    shell:
+        """
+        Rscript scripts/gsva_limma.R \
+            --expr {input.expr} \
+            --design {input.design} \
+            --contrasts {input.contrasts} \
+            --gene_sets {input.gene_sets} \
+            --outdir {params.outdir} \
+            &> {log}
+        """
+
+############# Step 15: GSEA #############
+rule gsea:
+    input:
+        deseq=STEP_GENE_SYMBOLS_DIR + "{contrast}.csv",
+        gene_sets=GENE_SETS_CSV_PATH,
+        gmts=GMT_FILES,
+        gsva=STEP_GSVA_DIR + "gsva_scores.csv", # not used; only for linear DAG
+    output:
+        STEP_GSEA_DIR + "{contrast}.csv",
+    conda:
+        "envs/gsea.yml"
+    log:
+        LOGS + Path(STEP_GSEA_DIR).name + "/{contrast}.log"
+    shell:
+        """
+        Rscript scripts/gsea.R \
+            --deseq {input.deseq} \
+            --gene_sets {input.gene_sets} \
+            --out {output} \
+            &> {log}
+        """
+
+############# Step 16: Auto-generate the methods paragraph #############
+
+# Capture tool versions
+rule versions_fastp:
+    output: STEP_PROSE_DIR + "versions/fastp.txt"
+    conda: "envs/fastp.yml"
+    shell:
+        """
+        # fastp prints the version to stderr and returns a '2' exit code.
+        # kind of annoying. so we swallow the non-zero exit code here,
+        # otherwise snakemake will think the step failed.s
+        fastp --version > {output} 2>&1 || true
+        """
+
+rule versions_fastqc:
+    output: STEP_PROSE_DIR + "versions/fastqc.txt"
+    conda: "envs/fastqc.yml"
+    log: LOGS + Path(STEP_PROSE_DIR).name + "/versions/fastqc.log"
+    shell:
+        """
+        fastqc --version > {output} 2>> {log}
+        """
+
+rule versions_multiqc:
+    output: STEP_PROSE_DIR + "versions/multiqc.txt"
+    conda: "envs/multiqc.yml"
+    log: LOGS + Path(STEP_PROSE_DIR).name + "/versions/multiqc.log"
+    shell:
+        """
+        multiqc --version > {output} 2>> {log}
+        """
+
+rule versions_rsem:
+    output:
+        rsem=STEP_PROSE_DIR + "versions/rsem.txt",
+        star=STEP_PROSE_DIR + "versions/star.txt",
+    conda: "envs/rsem.yml"
+    log: LOGS + Path(STEP_PROSE_DIR).name + "/versions/rsem_star.log"
+    shell:
+        """
+        rsem-calculate-expression --version > {output.rsem} 2>> {log}
+        STAR --version >> {output.star} 2>> {log}
+        """
+
+rule versions_tximport:
+    output: STEP_PROSE_DIR + "versions/tximport.txt"
+    conda: "envs/tximport.yml"
+    log: LOGS + Path(STEP_PROSE_DIR).name + "/versions/tximport.log"
+    shell:
+        """
+        Rscript -e 'cat(sprintf("tximport=%s\\n", as.character(packageVersion("tximport"))));' > {output} 2>> {log}
+        """
+
+rule versions_deseq2:
+    output: STEP_PROSE_DIR + "versions/deseq2.txt"
+    conda: "envs/deseq2.yml"
+    log: LOGS + Path(STEP_PROSE_DIR).name + "/versions/deseq2.log"
+    shell:
+        """
+        Rscript -e 'cat(sprintf("deseq2=%s\\n", as.character(packageVersion("DESeq2"))));' > {output} 2>> {log}
+        """
+
+rule versions_gsva_limma:
+    output:
+        gsva=STEP_PROSE_DIR + "versions/gsva.txt",
+        limma=STEP_PROSE_DIR + "versions/limma.txt",
+    conda: "envs/gsva_limma.yml"
+    log: LOGS + Path(STEP_PROSE_DIR).name + "/versions/gsva_limma.log"
+    shell:
+        """
+        Rscript -e 'cat(sprintf("gsva=%s\\n", as.character(packageVersion("GSVA"))));' > {output.gsva} 2>> {log}
+        Rscript -e 'cat(sprintf("limma=%s\\n", as.character(packageVersion("limma"))));' > {output.limma} 2>> {log}
+        """
+
+rule versions_fgsea:
+    output: STEP_PROSE_DIR + "versions/fgsea.txt"
+    conda: "envs/gsea.yml"
+    log: LOGS + Path(STEP_PROSE_DIR).name + "/versions/fgsea.log"
+    shell:
+        """
+        Rscript -e 'cat(sprintf("fgsea=%s\\n", as.character(packageVersion("fgsea"))));' > {output} 2>> {log}
+        """
+
+# write the methods paragraph
+rule prose:
+    input:
+        versions=expand(STEP_PROSE_DIR + "versions/{env}.txt", env=VERSION_ENVS),
+        gsea=expand(STEP_GSEA_DIR + "{contrast}.csv", contrast=CONTRAST_NAMES),
+    output:
+        STEP_PROSE_DIR + "methods.md",
+    params:
+        versions_dir=STEP_PROSE_DIR + "versions",
+        exclude=config.get("exclude", "") or "",
+        min_count=config["filter"]["min_count"],
+        min_samples=config["filter"]["min_samples"],
+        fasta=GENOME_FASTA,
+        gtf=GTF,
+    log:
+        LOGS + Path(STEP_PROSE_DIR).name + "/methods.log"
+    shell:
+        """
+        python scripts/prose.py \
+            --versions-dir {params.versions_dir} \
+            --exclude "{params.exclude}" \
+            --min-count {params.min_count} \
+            --min-samples {params.min_samples} \
+            --fasta {params.fasta} \
+            --gtf {params.gtf} \
+            --out {output} \
+            &> {log}
+        """
+
+############# Step 17: Exploratory plots (heatmaps, volcano, etc.) #############
+
+
+
+############# Last step: Re-generate user-defined Quarto reports #############
+rule render_quarto:
+    input:
+        qmd_path=REPORTS_DIR + "{dir_name}/{qmd_name}.qmd",
+        methods=STEP_PROSE_DIR + "methods.md", # not used; runs Quarto as the last step
+    output:
+        STEP_QUARTO_DIR + "{dir_name}/{qmd_name}.html",
+    conda:
+        "envs/quarto.yml"
+    log:
+        LOGS + Path(STEP_QUARTO_DIR).name + "/{dir_name}/{qmd_name}.log",
+    shell:
+        # Quarto writes the rendered HTML next to the source .qmd; move it into
+        # the results reports dir so it matches the declared output. (Quarto's
+        # --output-dir is resolved relative to the input file, so it can't be
+        # pointed straight at an arbitrary results path.)
+        """
+        quarto render {input.qmd_path} -M embed-resources:true &> {log}
+        mkdir -p "$(dirname {output})"
+        mv "$(dirname {input.qmd_path})/{wildcards.qmd_name}.html" "{output}"
+        """

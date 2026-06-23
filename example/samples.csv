@@ -1,0 +1,7 @@
+sample,r1,r2
+WT_rep1,reads/WT_rep1_R1.fastq.gz,reads/WT_rep1_R2.fastq.gz
+WT_rep2,reads/WT_rep2_R1.fastq.gz,reads/WT_rep2_R2.fastq.gz
+WT_rep3,reads/WT_rep3_R1.fastq.gz,reads/WT_rep3_R2.fastq.gz
+KO_rep1,reads/KO_rep1_R1.fastq.gz,reads/KO_rep1_R2.fastq.gz
+KO_rep2,reads/KO_rep2_R1.fastq.gz,reads/KO_rep2_R2.fastq.gz
+KO_rep3,reads/KO_rep3_R1.fastq.gz,reads/KO_rep3_R2.fastq.gz
