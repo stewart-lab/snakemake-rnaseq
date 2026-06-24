@@ -2,7 +2,7 @@
 """Render a text-based QC 'report card' for one sample.
 
 Metrics are collected from the RSEM/STAR + Picard QC outputs:
-  - uniquely_mapped_pct, total_reads_M   <- STAR Log.final.out
+  - uniquely_mapped_pct, total_reads_M   <- STAR log
   - genes_detected                       <- precomputed genes-detected table
   - rrna_pct, exonic_pct, intergenic_pct,
     median_5p_3p_bias                     <- Picard CollectRnaSeqMetrics
@@ -233,7 +233,7 @@ def read_genes_table(path):
 def main():
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--sample", required=True)
-    ap.add_argument("--star-log", required=True, help="STAR Log.final.out")
+    ap.add_argument("--star-log", required=True, help="STAR log")
     ap.add_argument("--rnaseq-metrics", required=True, help="Picard CollectRnaSeqMetrics output")
     ap.add_argument("--genes-table", required=True, help="genes_detected.csv (sample,genes_detected) for the whole dataset")
     ap.add_argument("--out", required=True)
