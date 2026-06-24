@@ -23,8 +23,7 @@ RUN apt update && apt-get install -y \
 
 # install python packages
 RUN pip install --upgrade pip
-RUN pip install \
-    kaleido
+RUN pip install kaleido
 
 # install chrome for kaleido
 RUN kaleido_get_chrome

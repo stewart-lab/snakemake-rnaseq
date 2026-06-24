@@ -169,18 +169,18 @@ def _fdr_etc():
 def render_references():
     """Bibliographic references for every tool/package used in the pipeline."""
     references = [
-        "fastp: Chen S, Zhou Y, Chen Y, Gu J. fastp: an ultra-fast all-in-one FASTQ preprocessor. Bioinformatics. 2018;34(17):i884-i890.",
+        "fastp: https://doi.org/10.1093/bioinformatics/bty560",
         "FastQC: Andrews S. FastQC: A Quality Control Tool for High Throughput Sequence Data. 2010. https://www.bioinformatics.babraham.ac.uk/projects/fastqc/",
-        "MultiQC: Ewels P, Magnusson M, Lundin S, Käller M. MultiQC: summarize analysis results for multiple tools and samples in a single report. Bioinformatics. 2016;32(19):3047-3048.",
-        "STAR: Dobin A, Davis CA, Schlesinger F, et al. STAR: ultrafast universal RNA-seq aligner. Bioinformatics. 2013;29(1):15-21.",
-        "RSEM: Li B, Dewey CN. RSEM: accurate transcript quantification from RNA-Seq data with or without a reference genome. BMC Bioinformatics. 2011;12:323.",
-        "tximport: Soneson C, Love MI, Robinson MD. Differential analyses for RNA-seq: transcript-level estimates improve gene-level inferences. F1000Research. 2015;4:1521.",
-        "DESeq2: Love MI, Huber W, Anders S. Moderated estimation of fold change and dispersion for RNA-seq data with DESeq2. Genome Biology. 2014;15(12):550.",
-        "GSVA: Hänzelmann S, Castelo R, Guinney J. GSVA: gene set variation analysis for microarray and RNA-seq data. BMC Bioinformatics. 2013;14:7.",
-        "limma: Ritchie ME, Phipson B, Wu D, Hu Y, Law CW, Shi W, Smyth GK. limma powers differential expression analyses for RNA-sequencing and microarray studies. Nucleic Acids Research. 2015;43(7):e47.",
-        "fgsea: Korotkevich G, Sukhov V, Budin N, Shpak B, Artyomov MN, Sergushichev A. Fast gene set enrichment analysis. bioRxiv. 2021. doi:10.1101/060012.",
+        "MultiQC: https://doi.org/10.1093/bioinformatics/btw354",
+        "STAR: https://doi.org/10.1093/bioinformatics/bts635",
+        "RSEM: https://doi.org/10.1186/1471-2105-12-323",
+        "tximport: https://doi.org/10.12688/f1000research.7563.2",
+        "DESeq2: https://doi.org/10.1186/s13059-014-0550-8",
+        "GSVA: https://doi.org/10.1186/1471-2105-14-7",
+        "limma: https://doi.org/10.1093/nar/gkv007",
+        "fgsea: https://doi.org/10.1101/060012",
         "Plotly: Plotly Technologies Inc. Collaborative data science. Montréal, QC: Plotly Technologies Inc.; 2015. https://plot.ly",
-        "Benjamini-Hochberg procedure: Benjamini Y, Hochberg Y. Controlling the false discovery rate: a practical and powerful approach to multiple testing. Journal of the Royal Statistical Society Series B. 1995;57(1):289-300.",
+        "Benjamini-Hochberg procedure: https://doi.org/10.1111/j.2517-6161.1995.tb02031.x",
     ]
     return "\n".join(f"- {ref}" for ref in references)
 

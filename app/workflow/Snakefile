@@ -19,7 +19,7 @@ CORES =                config["cores"]
 STEP_FASTP_DIR =                          RESULTS + "001_fastp_trimmed/"
 STEP_FASTQC_POST_TRIM_DIR =               RESULTS + "002_fastqc/"
 STEP_RSEM_DIR =                           RESULTS + "003_rsem/"
-STEP_QC_REPORT_CARDS_DIR =                RESULTS + "004_reports/"
+STEP_QC_REPORT_CARDS_DIR =                RESULTS + "004_qc_reports/"
 STEP_MULTIQC_DIR =                        RESULTS + "005_multiqc/"
 STEP_RAW_COUNT_MATRIX_DIR =               RESULTS + "006_raw_counts/"
 STEP_RAW_COUNTS_SAMPLES_DROPPED_DIR =     RESULTS + "007_raw_counts_samples_dropped/"
@@ -103,18 +103,13 @@ def all_excluded():
 
 rule all:
     input:
-        # The pipeline is wired as a single linear chain: each step takes the
-        # previous step's output as an input (some of those inputs are unused
-        # by the step itself and exist only to order the DAG). methods.md is the
-        # second-to-last node; the user-defined Quarto reports render last,
-        # after methods.md, so requesting both runs the whole pipeline.
         STEP_QC_REPORT_CARDS_DIR + "report_cards.txt",
         STEP_PROSE_DIR + "methods.md",
         QUARTO_HTML_FILES,
 
 ############# Step 1: Fastp trimming #############
 # trimmed .fastq are temporary and are deleted after RSEM has run
-rule fastp:
+rule fastp_trim:
     input:
         r1=get_r1,
         r2=get_r2,
@@ -143,7 +138,7 @@ rule fastp:
         """
 
 ############# Step 2: FastQC of trimmed reads #############
-rule fastqc_trimmed:
+rule fastqc:
     input:
         r1=STEP_FASTP_DIR + "{sample}_R1.fastq",
         r2=STEP_FASTP_DIR + "{sample}_R2.fastq",
@@ -207,11 +202,10 @@ rule rsem_calculate_expression:
         r2=STEP_FASTP_DIR + "{sample}_R2.fastq",
         grp=STEP_RSEM_REFERENCE_DIR + "star_reference.grp",
         sa_index=STEP_RSEM_REFERENCE_DIR + "SAindex",
-        r1_html=STEP_FASTQC_POST_TRIM_DIR + "{sample}_R1_fastqc.html", # not used; only for linear DAG
     output:
         genes=STEP_RSEM_DIR + "{sample}.genes.results",
         isoforms=STEP_RSEM_DIR + "{sample}.isoforms.results",
-        genome_bam=STEP_RSEM_DIR + "{sample}.genome.sorted.bam",
+        genome_bam=temp(STEP_RSEM_DIR + "{sample}.genome.sorted.bam"),
         star_log=STEP_RSEM_DIR + "{sample}.log",
     params:
         ref_prefix=STEP_RSEM_REFERENCE_DIR + "star_reference",
@@ -247,10 +241,11 @@ rule rsem_calculate_expression:
 ############# Step 4: per-sample QC report card (RSEM/STAR + Picard) #############
 
 # Build all Picard reference files
-rule picard_reference:
+rule picard_prepare_reference:
     input:
         fasta=GENOME_FASTA,
         gtf=GTF,
+        rrna_script="scripts/rrna_bed.py",
     output:
         seq_dict=STEP_PICARD_REFERENCE_DIR + "genome.dict",
         refflat=STEP_PICARD_REFERENCE_DIR + "refFlat.txt",
@@ -269,7 +264,7 @@ rule picard_reference:
           | awk 'BEGIN{{OFS="\\t"}} {{print $12,$1,$2,$3,$4,$5,$6,$7,$8,$9,$10}}' \
           > {output.refflat}
 
-        python scripts/rrna_bed.py --gtf {input.gtf} --out {output.rrna_bed} 2>> {log}
+        python {input.rrna_script} --gtf {input.gtf} --out {output.rrna_bed} 2>> {log}
         
         picard BedToIntervalList \
             I={output.rrna_bed} \
@@ -279,7 +274,7 @@ rule picard_reference:
         """
 
 # Per-sample Picard RNA-seq metrics
-rule picard_metrics:
+rule picard_rna_metrics:
     input:
         bam=STEP_RSEM_DIR + "{sample}.genome.sorted.bam",
         refflat=STEP_PICARD_REFERENCE_DIR + "refFlat.txt",
@@ -301,8 +296,9 @@ rule picard_metrics:
             &> {log}
         """
 
-rule genes_detected_table:
+rule count_genes_detected:
     input:
+        script="scripts/genes_detected.py",
         expand(STEP_RSEM_DIR + "{sample}.genes.results", sample=SAMPLES),
     output:
         STEP_QC_REPORT_CARDS_DIR + "csv/genes_detected.csv",
@@ -310,17 +306,17 @@ rule genes_detected_table:
         LOGS + Path(STEP_QC_REPORT_CARDS_DIR).name + "/genes_detected.log"
     shell:
         """
-        python scripts/genes_detected.py --out {output} {input} &> {log}
+        python {input.script} --out {output} {input} &> {log}
         """
 
-rule sample_qc_report_card:
+rule create_qc_report_cards:
     input:
         script="scripts/report_card.py",
         star_log=STEP_RSEM_DIR + "{sample}.log",
         rnaseq_metrics=STEP_QC_REPORT_CARDS_DIR + "picard/{sample}.rnaseq_metrics.txt",
         genes_table=STEP_QC_REPORT_CARDS_DIR + "csv/genes_detected.csv",
     output:
-        STEP_QC_REPORT_CARDS_DIR + "{sample}.report_card.txt",
+        STEP_QC_REPORT_CARDS_DIR + "sample_cards/{sample}.report_card.txt",
     log:
         LOGS + Path(STEP_QC_REPORT_CARDS_DIR).name + "/{sample}.report_card.log"
     shell:
@@ -334,9 +330,9 @@ rule sample_qc_report_card:
             &> {log}
         """
 
-rule qc_report_card:
+rule aggregate_qc_report_cards:
     input:
-        expand(STEP_QC_REPORT_CARDS_DIR + "{sample}.report_card.txt", sample=SAMPLES),
+        expand(STEP_QC_REPORT_CARDS_DIR + "sample_cards/{sample}.report_card.txt", sample=SAMPLES),
     output:
         STEP_QC_REPORT_CARDS_DIR + "report_cards.txt",
     shell:
@@ -387,8 +383,9 @@ rule multiqc:
         """
 
 ############# Step 6: Build raw count matrix #############
-rule tximport:
+rule tximport_build_count_matrix:
     input:
+        script="scripts/tximport.R",
         genes=expand(STEP_RSEM_DIR + "{sample}.genes.results", sample=SAMPLES),
         multiqc=STEP_MULTIQC_DIR + "multiqc_report.html", # not used; only for linear DAG
     output:
@@ -398,7 +395,7 @@ rule tximport:
     log:
         LOGS + Path(STEP_RAW_COUNT_MATRIX_DIR).name + "/tximport.log"
     shell:
-        "Rscript scripts/tximport.R --files \"{input.genes}\" --out {output}"
+        "Rscript {input.script} --files \"{input.genes}\" --out {output}"
 
 ############# Step 7: Drop excluded samples #############
 rule drop_samples:
@@ -424,7 +421,7 @@ rule drop_samples:
 ############# Step 8: Remove low-count genes #############
 # Applies the same min-count/min-samples gene filter to both the original
 # (all-samples) count matrix and the samples-dropped count matrix.
-rule filter_counts:
+rule filter_low_count_genes:
     input:
         counts_all=STEP_RAW_COUNT_MATRIX_DIR + "counts.csv",
         design_all=DESIGN_CSV_PATH,
@@ -458,8 +455,11 @@ rule filter_counts:
         shutil.copy(input.contrasts, output.contrasts)
 
 ############# Step 9: VSN + PCA + clustermap, all samples #############
-rule pca_clustermap_all:
+rule pca_clustermap_all_samples:
     input:
+        vst_script="scripts/vst_matrix.R",
+        pca_script="scripts/pca_plotly.py",
+        cluster_script="scripts/sample_clustermap.R",
         counts=STEP_RAW_COUNTS_LOW_COUNTS_FILTERED_DIR + "counts_all_samples.csv",
         design=STEP_RAW_COUNTS_LOW_COUNTS_FILTERED_DIR + "design_all_samples.csv",
         contrasts=STEP_RAW_COUNTS_LOW_COUNTS_FILTERED_DIR + "contrasts.csv",
@@ -478,19 +478,19 @@ rule pca_clustermap_all:
         LOGS + Path(STEP_PCA_ALL_SAMPLES_DIR).name + "/qc.log"
     shell:
         """
-        Rscript scripts/vst_matrix.R \
+        Rscript {input.vst_script} \
             --counts {input.counts} \
             --out {output.vst} \
             &> {log}
 
-        python scripts/pca_plotly.py \
+        python {input.pca_script} \
             --vst {output.vst} \
             --design {input.design} \
             --contrasts {input.contrasts} \
             --outdir {params.outdir} \
             >> {log} 2>&1
 
-        Rscript scripts/sample_clustermap.R \
+        Rscript {input.cluster_script} \
             --counts {input.counts} \
             --design {input.design} \
             --out {output.clustermap} \
@@ -498,8 +498,11 @@ rule pca_clustermap_all:
         """
 
 ############# Step 10: VSN + PCA + clustermap, samples dropped #############
-rule pca_clustermap_dropped:
+rule pca_clustermap_samples_dropped:
     input:
+        vst_script="scripts/vst_matrix.R",
+        pca_script="scripts/pca_plotly.py",
+        cluster_script="scripts/sample_clustermap.R",
         counts=STEP_RAW_COUNTS_LOW_COUNTS_FILTERED_DIR + "counts_samples_dropped.csv",
         design=STEP_RAW_COUNTS_LOW_COUNTS_FILTERED_DIR + "design_samples_dropped.csv",
         contrasts=STEP_RAW_COUNTS_LOW_COUNTS_FILTERED_DIR + "contrasts.csv",
@@ -519,19 +522,19 @@ rule pca_clustermap_dropped:
         LOGS + Path(STEP_PCA_SAMPLES_DROPPED_DIR).name + "/qc.log"
     shell:
         """
-        Rscript scripts/vst_matrix.R \
+        Rscript {input.vst_script} \
             --counts {input.counts} \
             --out {output.vst} \
             &> {log}
 
-        python scripts/pca_plotly.py \
+        python {input.pca_script} \
             --vst {output.vst} \
             --design {input.design} \
             --contrasts {input.contrasts} \
             --outdir {params.outdir} \
             >> {log} 2>&1
 
-        Rscript scripts/sample_clustermap.R \
+        Rscript {input.cluster_script} \
             --counts {input.counts} \
             --design {input.design} \
             --out {output.clustermap} \
@@ -539,8 +542,9 @@ rule pca_clustermap_dropped:
         """
 
 ############# Step 11: Differential expression analysis with DESeq2 #############
-rule deseq2:
+rule deseq2_differential_expression:
     input:
+        script="scripts/deseq2.R",
         counts=STEP_RAW_COUNTS_LOW_COUNTS_FILTERED_DIR + "counts_samples_dropped.csv",
         design=STEP_RAW_COUNTS_LOW_COUNTS_FILTERED_DIR + "design_samples_dropped.csv",
         contrasts=STEP_RAW_COUNTS_LOW_COUNTS_FILTERED_DIR + "contrasts.csv",
@@ -557,7 +561,7 @@ rule deseq2:
         LOGS + Path(STEP_DESEQ2_DIR).name + "/deseq2.log"
     shell:
         """
-        Rscript scripts/deseq2.R \
+        Rscript {input.script} \
             --counts {input.counts} \
             --design {input.design} \
             --contrasts {input.contrasts} \
@@ -569,9 +573,11 @@ rule deseq2:
 
 # Parse the gene_name attributes from the GTF using gffutils instead of 
 # relying on a species-specific annotation package (like org.hs.eg.db).
-rule gtf_gene_map:
+rule create_gene_symbol_mapping:
     input:
+        script="scripts/gtf_gene_map.py",
         gtf=GTF,
+        norm=STEP_DESEQ2_DIR + "normalized_counts.csv", # not used; only for linear DAG
     output:
         STEP_GENE_SYMBOLS_DIR + "map/gene_map.csv",
     conda:
@@ -580,12 +586,13 @@ rule gtf_gene_map:
         LOGS + Path(STEP_GENE_SYMBOLS_DIR).name + "/gtf_gene_map.log"
     shell:
         """
-        python scripts/gtf_gene_map.py --gtf {input.gtf} --out {output} &> {log}
+        python {input.script} --gtf {input.gtf} --out {output} &> {log}
         """
 
 # populate DESeq2 results with gene symbols
-rule gene_symbols:
+rule map_gene_symbols:
     input:
+        script="scripts/gene_symbols.py",
         table=STEP_DESEQ2_DIR + "{name}.csv",
         gene_map=STEP_GENE_SYMBOLS_DIR + "map/gene_map.csv",
     output:
@@ -594,7 +601,7 @@ rule gene_symbols:
         LOGS + Path(STEP_GENE_SYMBOLS_DIR).name + "/{name}.log"
     shell:
         """
-        python scripts/gene_symbols.py \
+        python {input.script} \
             --input {input.table} \
             --map {input.gene_map} \
             --output {output} \
@@ -602,8 +609,9 @@ rule gene_symbols:
         """
 
 ############# Step 13: GSVA + limma #############
-rule gsva_limma:
+rule gsva_limma_pathway_analysis:
     input:
+        script="scripts/gsva_limma.R",
         expr=STEP_GENE_SYMBOLS_DIR + "normalized_counts.csv",
         design=STEP_RAW_COUNTS_LOW_COUNTS_FILTERED_DIR + "design_samples_dropped.csv",
         contrasts=STEP_RAW_COUNTS_LOW_COUNTS_FILTERED_DIR + "contrasts.csv",
@@ -620,7 +628,7 @@ rule gsva_limma:
         LOGS + Path(STEP_GSVA_DIR).name + "/gsva_limma.log"
     shell:
         """
-        Rscript scripts/gsva_limma.R \
+        Rscript {input.script} \
             --expr {input.expr} \
             --design {input.design} \
             --contrasts {input.contrasts} \
@@ -630,12 +638,12 @@ rule gsva_limma:
         """
 
 ############# Step 14: GSEA #############
-rule gsea:
+rule gsea_pathway_analysis:
     input:
+        script="scripts/gsea.R",
         deseq=STEP_GENE_SYMBOLS_DIR + "{contrast}.csv",
         gene_sets=GENE_SETS_CSV_PATH,
         gmts=GMT_FILES,
-        gsva=STEP_GSVA_DIR + "gsva_scores.csv", # not used; only for linear DAG
     output:
         STEP_GSEA_DIR + "{contrast}.csv",
     conda:
@@ -644,7 +652,7 @@ rule gsea:
         LOGS + Path(STEP_GSEA_DIR).name + "/{contrast}.log"
     shell:
         """
-        Rscript scripts/gsea.R \
+        Rscript {input.script} \
             --deseq {input.deseq} \
             --gene_sets {input.gene_sets} \
             --out {output} \
@@ -655,6 +663,7 @@ rule gsea:
 
 # Capture tool versions
 rule versions_fastp:
+    input: scores=STEP_GSVA_DIR + "gsva_scores.csv", # not used; only for linear DAG
     output: STEP_PROSE_DIR + "versions/fastp.txt"
     conda: "envs/fastp.yml"
     shell:
@@ -666,6 +675,7 @@ rule versions_fastp:
         """
 
 rule versions_fastqc:
+    input: scores=STEP_GSVA_DIR + "gsva_scores.csv", # not used; only for linear DAG
     output: STEP_PROSE_DIR + "versions/fastqc.txt"
     conda: "envs/fastqc.yml"
     log: LOGS + Path(STEP_PROSE_DIR).name + "/versions/fastqc.log"
@@ -675,6 +685,7 @@ rule versions_fastqc:
         """
 
 rule versions_multiqc:
+    input: scores=STEP_GSVA_DIR + "gsva_scores.csv", # not used; only for linear DAG
     output: STEP_PROSE_DIR + "versions/multiqc.txt"
     conda: "envs/multiqc.yml"
     log: LOGS + Path(STEP_PROSE_DIR).name + "/versions/multiqc.log"
@@ -684,6 +695,7 @@ rule versions_multiqc:
         """
 
 rule versions_rsem:
+    input: scores=STEP_GSVA_DIR + "gsva_scores.csv", # not used; only for linear DAG
     output:
         rsem=STEP_PROSE_DIR + "versions/rsem.txt",
         star=STEP_PROSE_DIR + "versions/star.txt",
@@ -696,6 +708,7 @@ rule versions_rsem:
         """
 
 rule versions_tximport:
+    input: scores=STEP_GSVA_DIR + "gsva_scores.csv", # not used; only for linear DAG
     output: STEP_PROSE_DIR + "versions/tximport.txt"
     conda: "envs/tximport.yml"
     log: LOGS + Path(STEP_PROSE_DIR).name + "/versions/tximport.log"
@@ -705,6 +718,7 @@ rule versions_tximport:
         """
 
 rule versions_deseq2:
+    input: scores=STEP_GSVA_DIR + "gsva_scores.csv", # not used; only for linear DAG
     output: STEP_PROSE_DIR + "versions/deseq2.txt"
     conda: "envs/deseq2.yml"
     log: LOGS + Path(STEP_PROSE_DIR).name + "/versions/deseq2.log"
@@ -714,6 +728,7 @@ rule versions_deseq2:
         """
 
 rule versions_gsva_limma:
+    input: scores=STEP_GSVA_DIR + "gsva_scores.csv", # not used; only for linear DAG
     output:
         gsva=STEP_PROSE_DIR + "versions/gsva.txt",
         limma=STEP_PROSE_DIR + "versions/limma.txt",
@@ -726,6 +741,7 @@ rule versions_gsva_limma:
         """
 
 rule versions_fgsea:
+    input: scores=STEP_GSVA_DIR + "gsva_scores.csv", # not used; only for linear DAG
     output: STEP_PROSE_DIR + "versions/fgsea.txt"
     conda: "envs/gsea.yml"
     log: LOGS + Path(STEP_PROSE_DIR).name + "/versions/fgsea.log"
@@ -737,8 +753,9 @@ rule versions_fgsea:
 # write the methods paragraph
 rule prose:
     input:
+        script="scripts/prose.py",
         versions=expand(STEP_PROSE_DIR + "versions/{env}.txt", env=VERSION_ENVS),
-        gsea=expand(STEP_GSEA_DIR + "{contrast}.csv", contrast=CONTRAST_NAMES),
+        gsea=expand(STEP_GSEA_DIR + "{contrast}.csv", contrast=CONTRAST_NAMES), # not used; only for linear DAG
     output:
         STEP_PROSE_DIR + "methods.md",
     params:
@@ -752,7 +769,7 @@ rule prose:
         LOGS + Path(STEP_PROSE_DIR).name + "/methods.log"
     shell:
         """
-        python scripts/prose.py \
+        python {input.script} \
             --versions-dir {params.versions_dir} \
             --exclude "{params.exclude}" \
             --min-count {params.min_count} \
