@@ -15,12 +15,18 @@ def main():
     p.add_argument("--min-samples", required=True)
     p.add_argument("--fasta", required=True)
     p.add_argument("--gtf", required=True)
+    p.add_argument("--gsva-kcdf", default="Gaussian", help="GSVA kernel for the empirical CDF")
+    p.add_argument("--gsva-tau", default="1", help="GSVA tau weighting exponent")
+    p.add_argument("--gsea-rank-by", default="stat", help="DESeq2 column used to rank genes for GSEA")
+    p.add_argument("--gsea-min-size", default="15", help="minimum gene-set size tested by GSEA")
+    p.add_argument("--gsea-max-size", default="500", help="maximum gene-set size tested by GSEA")
     p.add_argument("--out", required=True, help="output methods markdown file")
     args = p.parse_args()
 
     parse_tool_versions(args.versions_dir)
     dropped_samples_by_reason = read_exclusions_csv(args.exclude)
-    paragraph = render_paragraph(dropped_samples_by_reason, args.min_count, args.min_samples, args.fasta, args.gtf)
+    paragraph = render_paragraph(dropped_samples_by_reason, args.min_count, args.min_samples,
+                                 args.fasta, args.gtf, args)
     references = render_references()
 
     os.makedirs(os.path.dirname(args.out) or ".", exist_ok=True)
@@ -76,21 +82,21 @@ def read_exclusions_csv(path):
                 dropped_samples_by_reason.setdefault(reason, []).append(sample)
     return dropped_samples_by_reason
 
-def render_paragraph(dropped_samples_by_reason: dict, min_count: int, min_samples: int, fasta: str, gtf: str):
+def render_paragraph(dropped_samples_by_reason: dict, min_count: int, min_samples: int, fasta: str, gtf: str, args):
     sentences = [
         _fastp(),
-        _fastqc(), 
+        _fastqc(),
         _alignment_reference(fasta, gtf),
         _rsem(),
         # TODO: Picard, etc goes here.
         _multiqc(),
         _tximport(),
-        _drop_samples(dropped_samples_by_reason), 
+        _drop_samples(dropped_samples_by_reason),
         _low_count_filter(min_count, min_samples),
-        _deseq2(), 
+        _deseq2(),
         _gene_symbol_mapping(),
-        _gsva_limma(),
-        _gsea(),
+        _gsva_limma(args.gsva_kcdf, args.gsva_tau),
+        _gsea(args.gsea_rank_by, args.gsea_min_size, args.gsea_max_size),
         _fdr_etc(),
     ]
     paragraph = " ".join(sentences)
@@ -157,11 +163,11 @@ def _deseq2():
 def _gene_symbol_mapping():
     return "Gene identifiers were mapped to gene symbols using the gene_name attributes in the GTF annotation."
 
-def _gsva_limma():
-    return f"Gene-set enrichment scores were computed for the [[GENE SETS, e.g. KEGG, Hallmark, etc.]] gene sets from [[GENE SETS ORIGIN, e.g. MSigDB]] using GSVA (v{version('gsva')}), and differential enrichment between conditions was tested with limma (v{version('limma')})."
+def _gsva_limma(kcdf: str, tau: str):
+    return f"Gene-set enrichment scores were computed for the [[GENE SETS, e.g. KEGG, Hallmark, etc.]] gene sets from [[GENE SETS ORIGIN, e.g. MSigDB]] using GSVA (v{version('gsva')}; {kcdf} kernel, tau = {tau}), and differential enrichment between conditions was tested with limma (v{version('limma')})."
 
-def _gsea():
-    return f"In parallel, gene set enrichment analysis (GSEA) was performed for each contrast on the DESeq2 statistic-ranked gene lists over the same gene sets using fgsea (v{version('fgsea')})."
+def _gsea(rank_by: str, min_size: str, max_size: str):
+    return f"In parallel, gene set enrichment analysis (GSEA) was performed for each contrast on gene lists ranked by the DESeq2 {rank_by} statistic over the same gene sets using fgsea (v{version('fgsea')}), testing gene sets of size {min_size} to {max_size}."
 
 def _fdr_etc():
     return "Multiple testing correction was performed with the Benjamini Hochberg method (built in to DESeq2 and limma). Volcano plots and heatmaps were generated using the Plotly Python library."

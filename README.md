@@ -35,7 +35,8 @@ differential expression → gene-set analysis (GSVA **and** GSEA) → reporting.
 ## Running
 
 The pipeline is packaged as a Docker image. Running the container will 1) create the workflow directory
-next to your config directory, 2) copy the script and environment files, and then 3) run the Snakemake pipeline.
+(set by `workflow_dir` in your config, or next to your config directory by default), 2) copy the script
+and environment files, and then 3) run the Snakemake pipeline.
 
 ```bash
 # Mount a working directory that contains your config + inputs (and your
@@ -55,9 +56,9 @@ Snakemake will create each step's conda environment on first run.
 
 ### Suggested project directory structure
 
-The Docker container treats the **parent of the config file's directory** as the project
-root and creates `workflow/` there. A tidy layout that keeps inputs, config, and
-outputs separate looks like this:
+By default the Docker container treats the **parent of the config file's directory** as the
+project root and creates `workflow/` there; set `workflow_dir` in the config to put it
+elsewhere. A tidy layout that keeps inputs, config, and outputs separate looks like this:
 
 ```text
 myproject/
@@ -76,7 +77,7 @@ myproject/
 │   └── gene_sets/          #   .gmt files referenced by gene_sets.csv
 ├── reports/                # reports_dir: your Quarto reports, one folder each
 │   └── summary/summary.qmd
-├── workflow/               # created by the Docker container (Snakefile + envs/rules/scripts)
+├── workflow/               # workflow_dir: staged by the container (Snakefile + envs/rules/scripts)
 ├── results/                # results_dir: all pipeline outputs
 └── logs/                   # logs_dir: per-rule logs
 ```
@@ -103,7 +104,10 @@ All inputs specified in the config YAML file (see
 | `reports_dir` | Directory of user-supplied Quarto `.qmd` reports to render (optional; see [Reports](#reports--quarto-optional)) |
 | `genome_dir` | Directory holding exactly one FASTA and one GTF |
 | `filter.min_count` / `filter.min_samples` | Low-count gene filter thresholds |
+| `gsva.kcdf` / `gsva.tau` | GSVA kernel (Gaussian/Poisson/none) and tau weighting exponent |
+| `gsea.rank_by` / `gsea.min_size` / `gsea.max_size` | DESeq2 column to rank genes by, and gene-set size bounds for fgsea |
 | `cores` | Number of CPU cores for the pipeline |
+| `workflow_dir` | Where to stage the generated workflow (optional; defaults to a `workflow/` dir next to the config directory) |
 | `results_dir` | Output of each step |
 | `logs_dir` | Logs for each step |
 
