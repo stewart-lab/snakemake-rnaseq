@@ -28,16 +28,15 @@ def main():
     cores = config.get("cores", 1)
     results_dir = config.get("results_dir", "")
 
-    # Where to stage the generated workflow. Prefer the explicit `workflow_dir`
-    # from the config (relative paths resolve against the config's directory);
-    # otherwise default to a `workflow/` dir next to the config's directory.
+    # Where to stage the generated workflow. Required in the config; relative
+    # paths are resolved against the config file's directory.
     workflow_dir = config.get("workflow_dir")
-    if workflow_dir:
-        workflow_dir = os.path.expanduser(workflow_dir)
-        if not os.path.isabs(workflow_dir):
-            workflow_dir = os.path.join(config_dir, workflow_dir)
-    else:
-        workflow_dir = os.path.join(os.path.dirname(config_dir), "workflow")
+    if not workflow_dir:
+        print("Error: config must specify 'workflow_dir'")
+        exit(1)
+    workflow_dir = os.path.expanduser(workflow_dir)
+    if not os.path.isabs(workflow_dir):
+        workflow_dir = os.path.join(config_dir, workflow_dir)
 
     if not os.path.exists(workflow_dir):
         os.makedirs(workflow_dir)

@@ -15,18 +15,13 @@ def main():
     p.add_argument("--min-samples", required=True)
     p.add_argument("--fasta", required=True)
     p.add_argument("--gtf", required=True)
-    p.add_argument("--gsva-kcdf", default="Gaussian", help="GSVA kernel for the empirical CDF")
-    p.add_argument("--gsva-tau", default="1", help="GSVA tau weighting exponent")
-    p.add_argument("--gsea-rank-by", default="stat", help="DESeq2 column used to rank genes for GSEA")
-    p.add_argument("--gsea-min-size", default="15", help="minimum gene-set size tested by GSEA")
-    p.add_argument("--gsea-max-size", default="500", help="maximum gene-set size tested by GSEA")
     p.add_argument("--out", required=True, help="output methods markdown file")
     args = p.parse_args()
 
     parse_tool_versions(args.versions_dir)
     dropped_samples_by_reason = read_exclusions_csv(args.exclude)
     paragraph = render_paragraph(dropped_samples_by_reason, args.min_count, args.min_samples,
-                                 args.fasta, args.gtf, args)
+                                 args.fasta, args.gtf)
     references = render_references()
 
     os.makedirs(os.path.dirname(args.out) or ".", exist_ok=True)
@@ -82,21 +77,22 @@ def read_exclusions_csv(path):
                 dropped_samples_by_reason.setdefault(reason, []).append(sample)
     return dropped_samples_by_reason
 
-def render_paragraph(dropped_samples_by_reason: dict, min_count: int, min_samples: int, fasta: str, gtf: str, args):
+def render_paragraph(dropped_samples_by_reason: dict, min_count: int, min_samples: int, fasta: str, gtf: str):
     sentences = [
         _fastp(),
         _fastqc(),
         _alignment_reference(fasta, gtf),
         _rsem(),
-        # TODO: Picard, etc goes here.
+        _picard(),
         _multiqc(),
         _tximport(),
         _drop_samples(dropped_samples_by_reason),
         _low_count_filter(min_count, min_samples),
+        _exploratory(),
         _deseq2(),
         _gene_symbol_mapping(),
-        _gsva_limma(args.gsva_kcdf, args.gsva_tau),
-        _gsea(args.gsea_rank_by, args.gsea_min_size, args.gsea_max_size),
+        _gsva_limma(),
+        _gsea(),
         _fdr_etc(),
     ]
     paragraph = " ".join(sentences)
@@ -115,10 +111,13 @@ def _alignment_reference(fasta: str, gtf: str):
     return f"The alignment reference was prepared with RSEM using the [[FASTA goes here, e.g. GRCh38 DNA primary assembly; raw filename was {fasta}]] FASTA and the [[GTF goes here, e.g. Ensembl GRCh38.111; raw filename was {gtf}]] GTF annotation."
 
 def _rsem():
-    return f"Trimmed reads were aligned to the reference and quantified at the gene level using RSEM (v{version('rsem')}) with STAR (v{version('star')})."
+    return f"Trimmed reads were aligned to the reference and quantified at the gene level (expected counts) using RSEM (v{version('rsem')}) with STAR (v{version('star')}) in paired-end mode."
+
+def _picard():
+    return f"Post-alignment RNA-seq metrics, including ribosomal, exonic, intronic and intergenic rates and 5'-to-3' transcript coverage bias, were collected with Picard CollectRnaSeqMetrics (v{version('picard')}) in non-strand-specific mode (STRAND_SPECIFICITY=NONE)."
 
 def _multiqc():
-    return f"Quality-control metrics from fastp, FastQC, and RSEM were aggregated into a single report with MultiQC (v{version('multiqc')})."
+    return f"Quality-control metrics from fastp, FastQC, RSEM, and Picard were aggregated into a single report with MultiQC (v{version('multiqc')})."
 
 def _tximport():
     return f"Per-sample RSEM gene-level results were imported and assembled into a count matrix with tximport (v{version('tximport')})."
@@ -157,20 +156,23 @@ def _drop_samples(dropped_samples_by_reason: dict):
 def _low_count_filter(min_count: int, min_samples: int):
     return f"Genes that did not have at least {min_count} counts in {min_samples} samples were removed."
 
+def _exploratory():
+    return "Sample relationships were examined by applying a blind variance-stabilizing transformation (DESeq2) to the filtered counts, followed by principal component analysis on the 500 most variable genes and hierarchical clustering of sample-to-sample Euclidean distances."
+
 def _deseq2():
-    return f"Pairwise differential expression analysis was performed with DESeq2 (v{version('deseq2')})."
+    return f"Pairwise differential expression analysis was performed with DESeq2 (v{version('deseq2')}), fitting a negative-binomial generalized linear model with a ~condition design and testing each contrast with the Wald test."
 
 def _gene_symbol_mapping():
     return "Gene identifiers were mapped to gene symbols using the gene_name attributes in the GTF annotation."
 
-def _gsva_limma(kcdf: str, tau: str):
-    return f"Gene-set enrichment scores were computed for the [[GENE SETS, e.g. KEGG, Hallmark, etc.]] gene sets from [[GENE SETS ORIGIN, e.g. MSigDB]] using GSVA (v{version('gsva')}; {kcdf} kernel, tau = {tau}), and differential enrichment between conditions was tested with limma (v{version('limma')})."
+def _gsva_limma():
+    return f"Gene-set enrichment scores were computed for the [[GENE SETS, e.g. KEGG, Hallmark, etc.]] gene sets from [[GENE SETS ORIGIN, e.g. MSigDB]] using GSVA (v{version('gsva')}) with a Gaussian kernel and tau = 1 on log2-transformed normalized counts, and differential enrichment between conditions was tested with limma (v{version('limma')})."
 
-def _gsea(rank_by: str, min_size: str, max_size: str):
-    return f"In parallel, gene set enrichment analysis (GSEA) was performed for each contrast on gene lists ranked by the DESeq2 {rank_by} statistic over the same gene sets using fgsea (v{version('fgsea')}), testing gene sets of size {min_size} to {max_size}."
+def _gsea():
+    return f"In parallel, gene set enrichment analysis (GSEA) was performed for each contrast on gene lists ranked by the DESeq2 Wald statistic over the same gene sets using fgsea (v{version('fgsea')}), testing gene sets of 15 to 500 genes."
 
 def _fdr_etc():
-    return "Multiple testing correction was performed with the Benjamini Hochberg method (built in to DESeq2 and limma). Volcano plots and heatmaps were generated using the Plotly Python library."
+    return "Multiple testing correction was performed with the Benjamini Hochberg method (built in to DESeq2 and limma). Interactive PCA plots were generated with the Plotly Python library and the sample-distance clustermap with pheatmap."
 
 def render_references():
     """Bibliographic references for every tool/package used in the pipeline."""
@@ -180,12 +182,14 @@ def render_references():
         "MultiQC: https://doi.org/10.1093/bioinformatics/btw354",
         "STAR: https://doi.org/10.1093/bioinformatics/bts635",
         "RSEM: https://doi.org/10.1186/1471-2105-12-323",
+        "Picard: Broad Institute. Picard Toolkit. 2019. https://broadinstitute.github.io/picard/",
         "tximport: https://doi.org/10.12688/f1000research.7563.2",
         "DESeq2: https://doi.org/10.1186/s13059-014-0550-8",
         "GSVA: https://doi.org/10.1186/1471-2105-14-7",
         "limma: https://doi.org/10.1093/nar/gkv007",
         "fgsea: https://doi.org/10.1101/060012",
         "Plotly: Plotly Technologies Inc. Collaborative data science. Montréal, QC: Plotly Technologies Inc.; 2015. https://plot.ly",
+        "pheatmap: Kolde R. pheatmap: Pretty Heatmaps. R package. https://CRAN.R-project.org/package=pheatmap",
         "Benjamini-Hochberg procedure: https://doi.org/10.1111/j.2517-6161.1995.tb02031.x",
     ]
     return "\n".join(f"- {ref}" for ref in references)

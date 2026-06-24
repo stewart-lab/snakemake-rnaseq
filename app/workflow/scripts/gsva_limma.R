@@ -12,10 +12,6 @@ opt <- parse_args(OptionParser(option_list = list(
   make_option("--design",    type = "character", help = "Design CSV: sample,condition"),
   make_option("--contrasts", type = "character", help = "Contrasts CSV: control,treatment"),
   make_option("--gene_sets", type = "character", help = "CSV listing GMT files (one per row)"),
-  make_option("--kcdf",      type = "character", default = "Gaussian",
-              help = "GSVA kernel for the empirical CDF: Gaussian, Poisson, or none [default %default]"),
-  make_option("--tau",       type = "double", default = 1,
-              help = "GSVA tau weighting exponent [default %default]"),
   make_option("--outdir",    type = "character", help = "Output directory")
 )))
 
@@ -83,7 +79,7 @@ rownames(design) <- design$sample
 contrasts <- read.csv(opt$contrasts, stringsAsFactors = FALSE)
 
 # ---- GSVA over all samples (one scores matrix, like normalized_counts) -------
-par <- gsvaParam(exprData = mat, geneSets = gene_sets, kcdf = opt$kcdf, tau = opt$tau)
+par <- gsvaParam(exprData = mat, geneSets = gene_sets, kcdf = "Gaussian")
 es_all <- gsva(par, verbose = FALSE)
 
 scores_out <- file.path(opt$outdir, "gsva_scores.csv")

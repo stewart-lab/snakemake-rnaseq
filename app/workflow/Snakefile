@@ -60,16 +60,6 @@ GMT_FILES = GENE_SETS["gmt"].tolist() if "gmt" in GENE_SETS.columns else GENE_SE
 
 EXCLUDE = pd.read_csv(config["exclude"]) if config.get("exclude") else pd.DataFrame(columns=["sample", "reason"])
 
-# GSVA / GSEA tuning parameters. Both config sections are optional; anything
-# unset falls back to the underlying tool's default.
-GSVA_PARAMS =   config.get("gsva") or {}
-GSEA_PARAMS =   config.get("gsea") or {}
-GSVA_KCDF =     GSVA_PARAMS.get("kcdf", "Gaussian")
-GSVA_TAU =      GSVA_PARAMS.get("tau", 1)
-GSEA_RANK_BY =  GSEA_PARAMS.get("rank_by", "stat")
-GSEA_MIN_SIZE = GSEA_PARAMS.get("min_size", 15)
-GSEA_MAX_SIZE = GSEA_PARAMS.get("max_size", 500)
-
 
 
 # The reference FASTA and GTF are auto-detected from the genome_dir, which must
@@ -93,7 +83,7 @@ GTF = _get_reference_file(GENOME_DIR, (".gtf",), "GTF (.gtf)")
 # Conda envs whose tools report a version for the methods paragraph. Each gets a
 # `versions_<env>` rule that runs the tool's own --version inside that env.
 VERSION_ENVS = [
-    "fastp", "fastqc", "multiqc", "rsem", "star", "tximport",
+    "fastp", "fastqc", "multiqc", "rsem", "star", "picard", "tximport",
     "deseq2", "gsva", "limma", "fgsea"
 ]
 
@@ -639,8 +629,6 @@ rule gsva_limma_pathway_analysis:
         results=expand(STEP_GSVA_DIR + "{contrast}.csv", contrast=CONTRAST_NAMES),
     params:
         outdir=STEP_GSVA_DIR,
-        kcdf=GSVA_KCDF,
-        tau=GSVA_TAU,
     conda:
         "envs/gsva_limma.yml"
     log:
@@ -652,8 +640,6 @@ rule gsva_limma_pathway_analysis:
             --design {input.design} \
             --contrasts {input.contrasts} \
             --gene_sets {input.gene_sets} \
-            --kcdf {params.kcdf} \
-            --tau {params.tau} \
             --outdir {params.outdir} \
             &> {log}
         """
@@ -667,10 +653,6 @@ rule gsea_pathway_analysis:
         gmts=GMT_FILES,
     output:
         STEP_GSEA_DIR + "{contrast}.csv",
-    params:
-        rank_by=GSEA_RANK_BY,
-        min_size=GSEA_MIN_SIZE,
-        max_size=GSEA_MAX_SIZE,
     conda:
         "envs/gsea.yml"
     log:
@@ -680,9 +662,6 @@ rule gsea_pathway_analysis:
         Rscript {input.script} \
             --deseq {input.deseq} \
             --gene_sets {input.gene_sets} \
-            --rank_by {params.rank_by} \
-            --min_size {params.min_size} \
-            --max_size {params.max_size} \
             --out {output} \
             &> {log}
         """
@@ -733,6 +712,17 @@ rule versions_rsem:
         """
         rsem-calculate-expression --version > {output.rsem} 2>> {log}
         STAR --version >> {output.star} 2>> {log}
+        """
+
+rule versions_picard:
+    input: scores=STEP_GSVA_DIR + "gsva_scores.csv", # not used; only for linear DAG
+    output: STEP_PROSE_DIR + "versions/picard.txt"
+    conda: "envs/qc_report.yml"
+    shell:
+        """
+        # Picard prints its version to stderr and exits non-zero, so swallow the
+        # exit code (as with fastp) to keep snakemake from flagging a failure.
+        picard CollectRnaSeqMetrics --version > {output} 2>&1 || true
         """
 
 rule versions_tximport:
@@ -793,11 +783,6 @@ rule prose:
         min_samples=config["filter"]["min_samples"],
         fasta=GENOME_FASTA,
         gtf=GTF,
-        gsva_kcdf=GSVA_KCDF,
-        gsva_tau=GSVA_TAU,
-        gsea_rank_by=GSEA_RANK_BY,
-        gsea_min_size=GSEA_MIN_SIZE,
-        gsea_max_size=GSEA_MAX_SIZE,
     log:
         LOGS + Path(STEP_PROSE_DIR).name + "/methods.log"
     shell:
@@ -809,11 +794,6 @@ rule prose:
             --min-samples {params.min_samples} \
             --fasta {params.fasta} \
             --gtf {params.gtf} \
-            --gsva-kcdf {params.gsva_kcdf} \
-            --gsva-tau {params.gsva_tau} \
-            --gsea-rank-by {params.gsea_rank_by} \
-            --gsea-min-size {params.gsea_min_size} \
-            --gsea-max-size {params.gsea_max_size} \
             --out {output} \
             &> {log}
         """

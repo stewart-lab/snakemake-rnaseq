@@ -42,23 +42,11 @@ filter:
   min_count: 10
   min_samples: 3
 
-# GSVA (per-sample gene-set scoring) parameters.
-gsva:
-  kcdf: Gaussian   # kernel for the empirical CDF: Gaussian, Poisson, or none
-  tau: 1           # weighting exponent in the GSVA statistic
-
-# GSEA (fgsea ranked-list enrichment) parameters.
-gsea:
-  rank_by: stat    # DESeq2 column used to rank genes (e.g. stat, log2FoldChange)
-  min_size: 15     # minimum gene-set size to test
-  max_size: 500    # maximum gene-set size to test
-
 # Number of CPU cores to use for the pipeline.
 cores: 8
 
 # Where to stage the generated workflow (Snakefile + envs/rules/scripts).
-# If omitted, defaults to a `workflow/` directory next to your config directory.
-# Relative paths are resolved against this config file's directory.
+# Required. Relative paths are resolved against this config file's directory.
 workflow_dir: /path/to/myproject/workflow
 
 # Output locations (created if missing).
