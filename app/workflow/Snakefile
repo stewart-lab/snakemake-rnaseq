@@ -299,14 +299,14 @@ rule picard_rna_metrics:
 rule count_genes_detected:
     input:
         script="scripts/genes_detected.py",
-        expand(STEP_RSEM_DIR + "{sample}.genes.results", sample=SAMPLES),
+        genes=expand(STEP_RSEM_DIR + "{sample}.genes.results", sample=SAMPLES),
     output:
         STEP_QC_REPORT_CARDS_DIR + "csv/genes_detected.csv",
     log:
         LOGS + Path(STEP_QC_REPORT_CARDS_DIR).name + "/genes_detected.log"
     shell:
         """
-        python {input.script} --out {output} {input} &> {log}
+        python {input.script} --out {output} {input.genes} &> {log}
         """
 
 rule create_qc_report_cards:
