@@ -24,10 +24,11 @@ def main():
         print(f"Error: config file '{config_yaml}' must end with .yaml or .yml")
         exit(1)
 
-    # read the number of cores from the config (default to 1 if unset)
+    # read the config yaml
     with open(config_yaml) as f:
         config = yaml.safe_load(f) or {}
     cores = config.get("cores", 1)
+    results_dir = config.get("results_dir", "")
 
     if not os.path.exists(workflow_dir):
         os.makedirs(workflow_dir)
@@ -66,7 +67,9 @@ def main():
     os.chdir(workflow_dir)
 
     # write DAG image
-    os.system(f'snakemake --rulegraph --configfile {config_yaml} | dot -Tpng > {config_dir}/dag.png')
+    if results_dir:
+        dag_dir = os.path.join(results_dir, "000_dag")
+        os.system(f'snakemake --rulegraph --configfile {config_yaml} | dot -Tpng > {dag_dir}/dag.png')
 
     # run snakemake in the workflow dir
     os.system(f'snakemake --use-conda --configfile {config_yaml} --cores {cores} --forcerun render_quarto')

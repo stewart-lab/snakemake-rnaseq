@@ -1,3 +1,5 @@
+[![](https://img.shields.io/appveyor/build/robertmillikin/snakemake-rna-seq/main)](https://ci.appveyor.com/project/robertmillikin/snakemake-rna-seq/history)
+
 # snakemake-rna-seq
 
 A [Snakemake](https://snakemake.github.io/) pipeline for bulk paired-end RNA-seq:
