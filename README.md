@@ -1,4 +1,5 @@
 [![](https://img.shields.io/appveyor/build/robertmillikin/snakemake-rna-seq/main)](https://ci.appveyor.com/project/robertmillikin/snakemake-rna-seq/history)
+[![](https://img.shields.io/docker/v/stewartlab/snakemake-rnaseq?sort=semver&color=blue)](https://hub.docker.com/r/stewartlab/snakemake-rnaseq/tags?page=1&ordering=last_updated)
 
 # snakemake-rna-seq
 
