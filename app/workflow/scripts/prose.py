@@ -88,7 +88,6 @@ def render_paragraph(dropped_samples_by_reason: dict, min_count: int, min_sample
         _tximport(),
         _drop_samples(dropped_samples_by_reason),
         _low_count_filter(min_count, min_samples),
-        _exploratory(),
         _deseq2(),
         _gene_symbol_mapping(),
         _gsva_limma(),
@@ -111,16 +110,16 @@ def _alignment_reference(fasta: str, gtf: str):
     return f"The alignment reference was prepared with RSEM using the [[FASTA goes here, e.g. GRCh38 DNA primary assembly; raw filename was {fasta}]] FASTA and the [[GTF goes here, e.g. Ensembl GRCh38.111; raw filename was {gtf}]] GTF annotation."
 
 def _rsem():
-    return f"Trimmed reads were aligned to the reference and quantified at the gene level (expected counts) using RSEM (v{version('rsem')}) with STAR (v{version('star')}) in paired-end mode."
+    return f"Trimmed reads were aligned to the reference and quantified at the gene level using RSEM (v{version('rsem')}) with STAR (v{version('star')}) in paired-end mode."
 
 def _picard():
-    return f"Post-alignment RNA-seq metrics, including ribosomal, exonic, intronic and intergenic rates and 5'-to-3' transcript coverage bias, were collected with Picard CollectRnaSeqMetrics (v{version('picard')}) in non-strand-specific mode (STRAND_SPECIFICITY=NONE)."
+    return f"Post-alignment RNA-seq metrics, including ribosomal, exonic, intronic and intergenic rates and 5'-to-3' transcript coverage bias, were collected with Picard CollectRnaSeqMetrics (v{version('picard')})."
 
 def _multiqc():
     return f"Quality-control metrics from fastp, FastQC, RSEM, and Picard were aggregated into a single report with MultiQC (v{version('multiqc')})."
 
 def _tximport():
-    return f"Per-sample RSEM gene-level results were imported and assembled into a count matrix with tximport (v{version('tximport')})."
+    return f"Per-sample RSEM gene-level results were assembled into a count matrix with tximport (v{version('tximport')})."
 
 def _drop_samples(dropped_samples_by_reason: dict):
     numbers = {
@@ -156,9 +155,6 @@ def _drop_samples(dropped_samples_by_reason: dict):
 def _low_count_filter(min_count: int, min_samples: int):
     return f"Genes that did not have at least {min_count} counts in {min_samples} samples were removed."
 
-def _exploratory():
-    return "Sample relationships were examined by applying a blind variance-stabilizing transformation (DESeq2) to the filtered counts, followed by principal component analysis on the 500 most variable genes and hierarchical clustering of sample-to-sample Euclidean distances."
-
 def _deseq2():
     return f"Pairwise differential expression analysis was performed with DESeq2 (v{version('deseq2')}), fitting a negative-binomial generalized linear model with a ~condition design and testing each contrast with the Wald test."
 
@@ -169,10 +165,10 @@ def _gsva_limma():
     return f"Gene-set enrichment scores were computed for the [[GENE SETS, e.g. KEGG, Hallmark, etc.]] gene sets from [[GENE SETS ORIGIN, e.g. MSigDB]] using GSVA (v{version('gsva')}) with a Gaussian kernel and tau = 1 on log2-transformed normalized counts, and differential enrichment between conditions was tested with limma (v{version('limma')})."
 
 def _gsea():
-    return f"In parallel, gene set enrichment analysis (GSEA) was performed for each contrast on gene lists ranked by the DESeq2 Wald statistic over the same gene sets using fgsea (v{version('fgsea')}), testing gene sets of 15 to 500 genes."
+    return f"Gene set enrichment analysis (GSEA) was performed for each contrast on gene lists ranked by the DESeq2 Wald statistic over the same gene sets using fgsea (v{version('fgsea')}), testing gene sets of 15 to 500 genes."
 
 def _fdr_etc():
-    return "Multiple testing correction was performed with the Benjamini Hochberg method (built in to DESeq2 and limma). Interactive PCA plots were generated with the Plotly Python library and the sample-distance clustermap with pheatmap."
+    return "Multiple testing correction was performed with the Benjamini-Hochberg method (built in to DESeq2 and limma). [[Plotly can be referenced here if you used it for figure generation.]]"
 
 def render_references():
     """Bibliographic references for every tool/package used in the pipeline."""
@@ -189,7 +185,6 @@ def render_references():
         "limma: https://doi.org/10.1093/nar/gkv007",
         "fgsea: https://doi.org/10.1101/060012",
         "Plotly: Plotly Technologies Inc. Collaborative data science. Montréal, QC: Plotly Technologies Inc.; 2015. https://plot.ly",
-        "pheatmap: Kolde R. pheatmap: Pretty Heatmaps. R package. https://CRAN.R-project.org/package=pheatmap",
         "Benjamini-Hochberg procedure: https://doi.org/10.1111/j.2517-6161.1995.tb02031.x",
     ]
     return "\n".join(f"- {ref}" for ref in references)

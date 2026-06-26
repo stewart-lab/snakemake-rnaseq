@@ -32,4 +32,4 @@ RUN kaleido_get_chrome
 WORKDIR /app
 COPY app /app
 
-CMD ["python", "main.py"]
+ENTRYPOINT ["python", "main.py"]

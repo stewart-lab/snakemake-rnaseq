@@ -5,15 +5,31 @@ import re
 import pandas as pd
 
 # read inputs from config
-RESULTS =             (config["results_dir"] + "/").replace("//", "/")
-LOGS =                (config["logs_dir"] + "/").replace("//", "/")
-REPORTS_DIR =         (config["reports_dir"] + "/").replace("//", "/") if config.get("reports_dir") else ""
-GENOME_DIR =          (config["genome_dir"] + "/").replace("//", "/")
-SAMPLESHEET_CSV_PATH = config["samples"]
-DESIGN_CSV_PATH =      config["design"]
-CONTRASTS_CSV_PATH =   config["contrasts"]
-GENE_SETS_CSV_PATH =   config["gene_sets"]
+CONFIG_YAML_PATH =     workflow.configfiles[0] if workflow.configfiles else None
+CONFIG_DIR =           os.path.normpath(os.path.dirname(CONFIG_YAML_PATH))
+RESULTS =              os.path.join(os.path.normpath(os.path.join(CONFIG_DIR, config["results_dir"])), "")
+LOGS =                 os.path.join(os.path.normpath(os.path.join(CONFIG_DIR, config["logs_dir"])), "")
+REPORTS_DIR =          os.path.join(os.path.normpath(os.path.join(CONFIG_DIR, config["reports_dir"])), "") if config.get("reports_dir") else ""
+GENOME_DIR =           os.path.join(os.path.normpath(os.path.join(CONFIG_DIR, config["genome_dir"])), "")
+SAMPLESHEET_CSV_PATH = os.path.normpath(os.path.join(CONFIG_DIR, config["samples"]))
+DESIGN_CSV_PATH =      os.path.normpath(os.path.join(CONFIG_DIR, config["design"]))
+CONTRASTS_CSV_PATH =   os.path.normpath(os.path.join(CONFIG_DIR, config["contrasts"]))
+EXCLUDE_CSV_PATH =     os.path.normpath(os.path.join(CONFIG_DIR, config["exclude"])) if config.get("exclude") else ""
+GENE_SETS_CSV_PATH =   os.path.normpath(os.path.join(CONFIG_DIR, config["gene_sets"]))
 CORES =                config["cores"]
+
+print("\n\n")
+print(f"*** Bulk RNA-seq pipeline ***")
+print(f"  Config dir:      {CONFIG_DIR}")
+print(f"  Results dir:     {RESULTS}")
+print(f"  Reports dir:     {REPORTS_DIR}")
+print(f"  Genome dir:      {GENOME_DIR}")
+print(f"  Samplesheet:     {SAMPLESHEET_CSV_PATH}")
+print(f"  Design matrix:   {DESIGN_CSV_PATH}")
+print(f"  Contrast matrix: {CONTRASTS_CSV_PATH}")
+print(f"  Exclude:         {EXCLUDE_CSV_PATH}")
+print(f"  Gene sets:       {GENE_SETS_CSV_PATH}")
+print("\n\n")
 
 # output directories for each step in the pipeline
 STEP_FASTP_DIR =                          RESULTS + "001_fastp_trimmed/"
@@ -58,7 +74,7 @@ CONTROL_CONDITIONS = sorted(CONTRASTS["control"].unique().tolist())
 GENE_SETS = pd.read_csv(GENE_SETS_CSV_PATH)
 GMT_FILES = GENE_SETS["gmt"].tolist() if "gmt" in GENE_SETS.columns else GENE_SETS.iloc[:, 0].tolist()
 
-EXCLUDE = pd.read_csv(config["exclude"]) if config.get("exclude") else pd.DataFrame(columns=["sample", "reason"])
+EXCLUDE = pd.read_csv(EXCLUDE_CSV_PATH) if config.get("exclude") else pd.DataFrame(columns=["sample", "reason"])
 
 
 
@@ -92,10 +108,10 @@ QMD_FILES = glob(os.path.join(REPORTS_DIR, "**", "*.qmd"), recursive=True) if RE
 QUARTO_HTML_FILES = [STEP_QUARTO_DIR + os.path.basename(os.path.dirname(f)) + "/" + os.path.splitext(os.path.basename(f))[0] + ".html" for f in QMD_FILES]
 
 def get_r1(wildcards):
-    return samples_df.loc[wildcards.sample, "r1"]
+    return os.path.normpath(os.path.join(CONFIG_DIR, samples_df.loc[wildcards.sample, "r1"]))
 
 def get_r2(wildcards):
-    return samples_df.loc[wildcards.sample, "r2"]
+    return os.path.normpath(os.path.join(CONFIG_DIR, samples_df.loc[wildcards.sample, "r2"]))
 
 def all_excluded():
     """All samples listed in the exclude table, de-duplicated."""
@@ -118,6 +134,8 @@ rule fastp_trim:
         r2=temp(STEP_FASTP_DIR + "{sample}_R2.fastq"),
         html=STEP_FASTP_DIR + "{sample}.fastp.html",
         json=STEP_FASTP_DIR + "{sample}.fastp.json",
+    threads: 
+        CORES
     conda:
         "envs/fastp.yml"
     log:
@@ -131,7 +149,7 @@ rule fastp_trim:
             --out2 {output.r2} \
             --html {output.html} \
             --json {output.json} \
-            --thread 1 \
+            --thread {threads} \
             --detect_adapter_for_pe \
             --trim_poly_x \
             &> {log}
@@ -149,6 +167,8 @@ rule fastqc:
         r2_zip=STEP_FASTQC_POST_TRIM_DIR + "{sample}_R2_fastqc.zip",
     params:
         outdir=STEP_FASTQC_POST_TRIM_DIR
+    threads: 
+        CORES
     conda:
         "envs/fastqc.yml"
     log:
@@ -156,7 +176,7 @@ rule fastqc:
     shell:
         """
         mkdir -p {params.outdir}
-        fastqc -o {params.outdir} --threads 1 {input.r1} {input.r2} &> {log}
+        fastqc -o {params.outdir} --threads {threads} {input.r1} {input.r2} &> {log}
         """
 
 ############# Step 3: RSEM expression quantification #############
@@ -219,6 +239,9 @@ rule rsem_calculate_expression:
         LOGS + Path(STEP_RSEM_DIR).name + "/{sample}.log"
     shell:
         """
+        # check CPU architecture. STAR only works on avx2.
+        bash scripts/check_star_cpu.sh &> {log}
+
         mkdir -p {params.outdir}
         rsem-calculate-expression \
             --star \
@@ -677,7 +700,7 @@ rule versions_fastp:
         """
         # fastp prints the version to stderr and returns a '2' exit code.
         # kind of annoying. so we swallow the non-zero exit code here,
-        # otherwise snakemake will think the step failed.s
+        # otherwise snakemake will think the step failed.
         fastp --version > {output} 2>&1 || true
         """
 

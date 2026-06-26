@@ -9,7 +9,7 @@ parser.add_argument('config_yaml', type=str)
 args = parser.parse_args()
 
 def main():
-    config_yaml = args.config_yaml
+    config_yaml = os.path.normpath(args.config_yaml)
     config_dir = os.path.dirname(config_yaml)
 
     # check that config_yaml exists
@@ -24,24 +24,26 @@ def main():
 
     # read the config yaml
     with open(config_yaml) as f:
-        config = yaml.safe_load(f) or {}
+        config = yaml.safe_load(f) or dict()
     cores = config.get("cores", 1)
-    results_dir = config.get("results_dir", "")
-
-    # Where to stage the generated workflow. Required in the config; relative
-    # paths are resolved against the config file's directory.
+    results_dir = config.get("results_dir")
     workflow_dir = config.get("workflow_dir")
+    
     if not workflow_dir:
         print("Error: config must specify 'workflow_dir'")
         exit(1)
-    workflow_dir = os.path.expanduser(workflow_dir)
-    if not os.path.isabs(workflow_dir):
-        workflow_dir = os.path.join(config_dir, workflow_dir)
+    if not results_dir:
+        print("Error: config must specify 'results_dir'")
+        exit(1)
+
+    # get workflow + results as absolute paths
+    workflow_dir = os.path.normpath(os.path.join(config_dir, workflow_dir))
+    results_dir = os.path.normpath(os.path.join(config_dir, results_dir))
 
     if not os.path.exists(workflow_dir):
         os.makedirs(workflow_dir)
 
-    # Stage the workflow into workflow_dir: copy envs/rules/scripts from the
+    # copy the workflow into workflow_dir: copy envs/rules/scripts from the
     # container, replacing any file whose contents differ (checksum mismatch)
     # and leaving unchanged files in place.
     subdirs = ['envs', 'rules', 'scripts']
@@ -77,7 +79,8 @@ def main():
     # write DAG image
     if results_dir:
         dag_dir = os.path.join(results_dir, "000_dag")
-        os.system(f'snakemake --rulegraph --configfile {config_yaml} | dot -Tpng > {dag_dir}/dag.png')
+        os.makedirs(dag_dir, exist_ok=True)
+        os.system(f'snakemake --rulegraph --configfile {config_yaml} | dot -Tpng > \"{dag_dir}/dag.png\"')
 
     # run snakemake in the workflow dir
     os.system(f'snakemake --use-conda --configfile {config_yaml} --cores {cores} --forcerun render_quarto')
