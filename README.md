@@ -14,6 +14,7 @@ differential expression → gene-set analysis (GSVA **and** GSEA) → reporting.
 
 | Step | Output folder | Tool | Description |
 |------|---------------|------|-------------|
+| 0 | `000_dag` | graphviz | PNG visualization of the DAG |
 | 1 | `001_fastp_trimmed` | fastp | Adapter/quality trimming + polyX removal |
 | 2 | `002_fastqc` | FastQC | QC of the trimmed reads |
 | – | `<genome_dir>/star_reference` | RSEM + STAR | Build the alignment/quantification index |

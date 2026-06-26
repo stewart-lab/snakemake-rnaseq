@@ -1,12 +1,13 @@
 from pathlib import Path
 import os
+import sys
 from glob import glob
 import re
 import pandas as pd
 
 # read inputs from config
-CONFIG_YAML_PATH =     workflow.configfiles[0] if workflow.configfiles else None
-CONFIG_DIR =           os.path.normpath(os.path.dirname(CONFIG_YAML_PATH))
+CONFIG_YAML_PATH =     workflow.configfiles[0]
+CONFIG_DIR =           os.path.join(os.path.normpath(os.path.dirname(CONFIG_YAML_PATH)), "")
 RESULTS =              os.path.join(os.path.normpath(os.path.join(CONFIG_DIR, config["results_dir"])), "")
 LOGS =                 os.path.join(os.path.normpath(os.path.join(CONFIG_DIR, config["logs_dir"])), "")
 REPORTS_DIR =          os.path.join(os.path.normpath(os.path.join(CONFIG_DIR, config["reports_dir"])), "") if config.get("reports_dir") else ""
@@ -18,18 +19,20 @@ EXCLUDE_CSV_PATH =     os.path.normpath(os.path.join(CONFIG_DIR, config["exclude
 GENE_SETS_CSV_PATH =   os.path.normpath(os.path.join(CONFIG_DIR, config["gene_sets"]))
 CORES =                config["cores"]
 
-print("\n\n")
-print(f"*** Bulk RNA-seq pipeline ***")
-print(f"  Config dir:      {CONFIG_DIR}")
-print(f"  Results dir:     {RESULTS}")
-print(f"  Reports dir:     {REPORTS_DIR}")
-print(f"  Genome dir:      {GENOME_DIR}")
-print(f"  Samplesheet:     {SAMPLESHEET_CSV_PATH}")
-print(f"  Design matrix:   {DESIGN_CSV_PATH}")
-print(f"  Contrast matrix: {CONTRASTS_CSV_PATH}")
-print(f"  Exclude:         {EXCLUDE_CSV_PATH}")
-print(f"  Gene sets:       {GENE_SETS_CSV_PATH}")
-print("\n\n")
+# these are printed to stderr, not stdout, because creating the rulegraph/DAG .png
+# uses output from stdout, and these print statements create problems
+print("\n\n", file=sys.stderr)
+print(f"*** Bulk RNA-seq pipeline ***", file=sys.stderr)
+print(f"  Config dir:      {CONFIG_DIR}", file=sys.stderr)
+print(f"  Results dir:     {RESULTS}", file=sys.stderr)
+print(f"  Reports dir:     {REPORTS_DIR}", file=sys.stderr)
+print(f"  Genome dir:      {GENOME_DIR}", file=sys.stderr)
+print(f"  Samplesheet:     {SAMPLESHEET_CSV_PATH}", file=sys.stderr)
+print(f"  Design matrix:   {DESIGN_CSV_PATH}", file=sys.stderr)
+print(f"  Contrast matrix: {CONTRASTS_CSV_PATH}", file=sys.stderr)
+print(f"  Exclude:         {EXCLUDE_CSV_PATH}", file=sys.stderr)
+print(f"  Gene sets:       {GENE_SETS_CSV_PATH}", file=sys.stderr)
+print("\n\n", file=sys.stderr)
 
 # output directories for each step in the pipeline
 STEP_FASTP_DIR =                          RESULTS + "001_fastp_trimmed/"
@@ -113,13 +116,12 @@ def get_r1(wildcards):
 def get_r2(wildcards):
     return os.path.normpath(os.path.join(CONFIG_DIR, samples_df.loc[wildcards.sample, "r2"]))
 
-def all_excluded():
+def get_excluded_samples():
     """All samples listed in the exclude table, de-duplicated."""
     return EXCLUDE["sample"].dropna().astype(str).drop_duplicates().tolist()
 
 rule all:
     input:
-        STEP_QC_REPORT_CARDS_DIR + "report_cards.txt",
         STEP_PROSE_DIR + "methods.md",
         QUARTO_HTML_FILES,
 
@@ -430,7 +432,7 @@ rule drop_samples:
         counts=STEP_RAW_COUNTS_SAMPLES_DROPPED_DIR + "counts.csv",
         design=STEP_RAW_COUNTS_SAMPLES_DROPPED_DIR + "design.csv",
     params:
-        drop=all_excluded(),
+        drop=get_excluded_samples(),
     log:
         LOGS + Path(STEP_RAW_COUNTS_SAMPLES_DROPPED_DIR).name + "/drop.log"
     shell:
@@ -801,7 +803,7 @@ rule prose:
         STEP_PROSE_DIR + "methods.md",
     params:
         versions_dir=STEP_PROSE_DIR + "versions",
-        exclude=config.get("exclude", "") or "",
+        exclude=EXCLUDE_CSV_PATH,
         min_count=config["filter"]["min_count"],
         min_samples=config["filter"]["min_samples"],
         fasta=GENOME_FASTA,

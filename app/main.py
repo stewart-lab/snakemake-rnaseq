@@ -80,7 +80,13 @@ def main():
     if results_dir:
         dag_dir = os.path.join(results_dir, "000_dag")
         os.makedirs(dag_dir, exist_ok=True)
-        os.system(f'snakemake --rulegraph --configfile {config_yaml} | dot -Tpng > \"{dag_dir}/dag.png\"')
+        os.system(
+            f'snakemake --rulegraph --configfile {config_yaml} | '
+            f'dot -Tpng '
+            f'-Grankdir=TB '       # top to bottom flow
+            f'-Gsplines=ortho '    # right-angle edges
+            f'> {dag_dir}/dag.png'
+        )
 
     # run snakemake in the workflow dir
     os.system(f'snakemake --use-conda --configfile {config_yaml} --cores {cores} --forcerun render_quarto')
