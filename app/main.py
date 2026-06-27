@@ -80,7 +80,7 @@ def main():
 
     # write DAG image (best-effort: a failure here shouldn't abort the run)
     if results_dir:
-        dag_dir = os.path.join(results_dir, "000_dag")
+        dag_dir = os.path.join(results_dir, "000_meta")
         os.makedirs(dag_dir, exist_ok=True)
         dag_png = os.path.join(dag_dir, "dag.png")
         dag_cmd = (

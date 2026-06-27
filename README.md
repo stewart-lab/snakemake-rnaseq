@@ -14,7 +14,7 @@ differential expression → gene-set analysis (GSVA **and** GSEA) → reporting.
 
 | Step | Output folder | Tool | Description |
 |------|---------------|------|-------------|
-| 0 | `000_dag` | graphviz | PNG visualization of the DAG |
+| 0 | `000_meta` | graphviz | DAG visualization (PNG) + captured tool versions |
 | 1 | `001_fastp_trimmed` | fastp | Adapter/quality trimming + polyX removal |
 | 2 | `002_fastqc` | FastQC | QC of the trimmed reads |
 | – | `<genome_dir>/star_reference` | RSEM + STAR | Build the alignment/quantification index |
@@ -32,7 +32,7 @@ differential expression → gene-set analysis (GSVA **and** GSEA) → reporting.
 | 13 | `013_deseq2_gene_symbols` | gffutils | Map gene IDs → gene names using the GTF |
 | 14 | `014_gsva` | GSVA + limma | Per-sample gene-set scores + differential enrichment |
 | 15 | `015_gsea` | fgsea | Ranked-list gene-set enrichment per contrast |
-| 16 | `016_prose` | – | Auto-generated methods paragraph + tool versions |
+| 16 | `016_prose` | – | Auto-generated methods paragraph |
 | – | `reports` | Quarto | Render any user-supplied `.qmd` reports |
 
 ## Running
