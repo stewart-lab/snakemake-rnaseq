@@ -36,7 +36,6 @@ print("\n\n", file=sys.stderr)
 
 # ********** output directories for each step in the pipeline **********
 STEP_META_DIR =                           RESULTS + "000_meta/"
-STEP_VERSIONS_DIR =                       STEP_META_DIR + "versions/"
 STEP_FASTP_DIR =                          RESULTS + "001_fastp_trimmed/"
 STEP_FASTQC_POST_TRIM_DIR =               RESULTS + "002_fastqc/"
 STEP_STRANDEDNESS_DIR =                   RESULTS + "003_strandedness/"
@@ -192,6 +191,7 @@ rule fastp_trim:
             --thread {threads} \
             --detect_adapter_for_pe \
             --trim_poly_x \
+            --length_required 20 \
             &> {log}
         """
 
@@ -277,8 +277,8 @@ rule rseqc_infer_strandedness:
         mkdir -p $(dirname {params.prefix})
 
         # create subsampled FASTQs
-        head -n $(( {params.n_reads} * 4 )) {input.r1} > {params.prefix}sub_R1.fastq
-        head -n $(( {params.n_reads} * 4 )) {input.r2} > {params.prefix}sub_R2.fastq
+        seqtk sample -s 100 {input.r1} {params.n_reads} > {params.prefix}sub_R1.fastq
+        seqtk sample -s 100 {input.r2} {params.n_reads} > {params.prefix}sub_R2.fastq
 
         STAR --runThreadN {threads} \
              --genomeDir {params.genome_dir} \
@@ -393,7 +393,6 @@ rule rsem_calculate_expression:
             --strandedness {params.strandedness} \
             --num-threads {threads} \
             --star-output-genome-bam \
-            --keep-intermediate-files \
             {input.r1} {input.r2} \
             {params.ref_prefix} \
             {params.out_prefix} \
@@ -851,8 +850,7 @@ rule gsea_pathway_analysis:
 
 # Capture tool versions
 rule versions_fastp:
-    input: scores=STEP_GSVA_DIR + "gsva_scores.csv", # not used; only for linear DAG
-    output: STEP_VERSIONS_DIR + "fastp.txt"
+    output: STEP_META_DIR + "versions/fastp.txt"
     conda: "envs/fastp.yml"
     shell:
         """
@@ -863,8 +861,7 @@ rule versions_fastp:
         """
 
 rule versions_fastqc:
-    input: scores=STEP_GSVA_DIR + "gsva_scores.csv", # not used; only for linear DAG
-    output: STEP_VERSIONS_DIR + "fastqc.txt"
+    output: STEP_META_DIR + "versions/fastqc.txt"
     conda: "envs/fastqc.yml"
     log: LOGS + Path(STEP_META_DIR).name + "/versions/fastqc.log"
     shell:
@@ -873,8 +870,7 @@ rule versions_fastqc:
         """
 
 rule versions_rseqc:
-    input: scores=STEP_GSVA_DIR + "gsva_scores.csv", # not used; only for linear DAG
-    output: STEP_VERSIONS_DIR + "rseqc.txt"
+    output: STEP_META_DIR + "versions/rseqc.txt"
     conda: "envs/rseqc.yml"
     log: LOGS + Path(STEP_META_DIR).name + "/versions/rseqc.log"
     shell:
@@ -883,8 +879,7 @@ rule versions_rseqc:
         """
 
 rule versions_multiqc:
-    input: scores=STEP_GSVA_DIR + "gsva_scores.csv", # not used; only for linear DAG
-    output: STEP_VERSIONS_DIR + "multiqc.txt"
+    output: STEP_META_DIR + "versions/multiqc.txt"
     conda: "envs/multiqc.yml"
     log: LOGS + Path(STEP_META_DIR).name + "/versions/multiqc.log"
     shell:
@@ -893,10 +888,9 @@ rule versions_multiqc:
         """
 
 rule versions_rsem:
-    input: scores=STEP_GSVA_DIR + "gsva_scores.csv", # not used; only for linear DAG
     output:
-        rsem=STEP_VERSIONS_DIR + "rsem.txt",
-        star=STEP_VERSIONS_DIR + "star.txt",
+        rsem=STEP_META_DIR + "versions/rsem.txt",
+        star=STEP_META_DIR + "versions/star.txt",
     conda: "envs/rsem.yml"
     log: LOGS + Path(STEP_META_DIR).name + "/versions/rsem_star.log"
     shell:
@@ -906,8 +900,7 @@ rule versions_rsem:
         """
 
 rule versions_picard:
-    input: scores=STEP_GSVA_DIR + "gsva_scores.csv", # not used; only for linear DAG
-    output: STEP_VERSIONS_DIR + "picard.txt"
+    output: STEP_META_DIR + "versions/picard.txt"
     conda: "envs/qc_report.yml"
     shell:
         """
@@ -917,8 +910,7 @@ rule versions_picard:
         """
 
 rule versions_tximport:
-    input: scores=STEP_GSVA_DIR + "gsva_scores.csv", # not used; only for linear DAG
-    output: STEP_VERSIONS_DIR + "tximport.txt"
+    output: STEP_META_DIR + "versions/tximport.txt"
     conda: "envs/tximport.yml"
     log: LOGS + Path(STEP_META_DIR).name + "/versions/tximport.log"
     shell:
@@ -927,8 +919,7 @@ rule versions_tximport:
         """
 
 rule versions_deseq2:
-    input: scores=STEP_GSVA_DIR + "gsva_scores.csv", # not used; only for linear DAG
-    output: STEP_VERSIONS_DIR + "deseq2.txt"
+    output: STEP_META_DIR + "versions/deseq2.txt"
     conda: "envs/deseq2.yml"
     log: LOGS + Path(STEP_META_DIR).name + "/versions/deseq2.log"
     shell:
@@ -937,10 +928,9 @@ rule versions_deseq2:
         """
 
 rule versions_gsva_limma:
-    input: scores=STEP_GSVA_DIR + "gsva_scores.csv", # not used; only for linear DAG
     output:
-        gsva=STEP_VERSIONS_DIR + "gsva.txt",
-        limma=STEP_VERSIONS_DIR + "limma.txt",
+        gsva=STEP_META_DIR + "versions/gsva.txt",
+        limma=STEP_META_DIR + "versions/limma.txt",
     conda: "envs/gsva_limma.yml"
     log: LOGS + Path(STEP_META_DIR).name + "/versions/gsva_limma.log"
     shell:
@@ -950,8 +940,7 @@ rule versions_gsva_limma:
         """
 
 rule versions_fgsea:
-    input: scores=STEP_GSVA_DIR + "gsva_scores.csv", # not used; only for linear DAG
-    output: STEP_VERSIONS_DIR + "fgsea.txt"
+    output: STEP_META_DIR + "versions/fgsea.txt"
     conda: "envs/gsea.yml"
     log: LOGS + Path(STEP_META_DIR).name + "/versions/fgsea.log"
     shell:
@@ -963,14 +952,15 @@ rule versions_fgsea:
 rule prose:
     input:
         script="scripts/prose.py",
-        versions=expand(STEP_VERSIONS_DIR + "{env}.txt", env=VERSION_ENVS),
+        versions=expand(STEP_META_DIR + "versions/{env}.txt", env=VERSION_ENVS),
         strand_samplesheet=STEP_STRANDEDNESS_DIR + "samples.csv",
         input_samplesheet=SAMPLESHEET_CSV_PATH,
         gsea=expand(STEP_GSEA_DIR + "{contrast}.csv", contrast=CONTRAST_NAMES), # not used; only for linear DAG
+        gsva=STEP_GSVA_DIR + "gsva_scores.csv", # not used; only for linear DAG
     output:
         STEP_PROSE_DIR + "methods.md",
     params:
-        versions_dir=STEP_VERSIONS_DIR,
+        versions_dir=STEP_META_DIR + "versions",
         exclude=EXCLUDE_CSV_PATH,
         min_count=config["filter"]["min_count"],
         min_samples=config["filter"]["min_samples"],

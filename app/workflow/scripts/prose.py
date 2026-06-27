@@ -57,7 +57,15 @@ def parse_tool_versions(versions_dir: str) -> None:
         if not name.endswith(".txt"):
             continue
         with open(os.path.join(versions_dir, name)) as f:
-            line = f.readline().strip()
+            for line in f.readlines():
+                line = line.strip()
+
+                # when we reach a line <50 chars long, we assume we have found
+                # the line containing the version info. in most cases, this
+                # is the first line. but sometimes there are errors/warnings/etc.
+                # that we will ignore.
+                if len(line) < 50:
+                    break
 
         # Version files come in two shapes: "key=value" (from R packageVersion)
         # and a tool's own --version free text (e.g. "FastQC v0.12.1"). For
@@ -66,6 +74,9 @@ def parse_tool_versions(versions_dir: str) -> None:
         value = line.split("=", 1)[1] if "=" in line else line
         m = re.search(r"\d.*", value)
         version_number = m.group() if m else None
+
+        if version_number and len(version_number) > 20:
+            version_number = "[[** ERROR **]]"
 
         tool = os.path.basename(name).replace(".txt", "")
         _tool_to_version[tool] = version_number

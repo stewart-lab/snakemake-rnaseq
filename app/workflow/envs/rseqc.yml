@@ -7,5 +7,6 @@ dependencies:
   - rseqc=5.0.4
   - samtools=1.21
   - star=2.7.11b
+  - seqtk=1.5
   - ucsc-gtftogenepred=482
   - ucsc-genepredtobed=482
