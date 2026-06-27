@@ -1,5 +1,7 @@
 import os
 import shutil
+import shlex
+import subprocess
 import argparse
 import hashlib
 import yaml
@@ -76,20 +78,31 @@ def main():
     # change working directory to workflow dir
     os.chdir(workflow_dir)
 
-    # write DAG image
+    # write DAG image (best-effort: a failure here shouldn't abort the run)
     if results_dir:
         dag_dir = os.path.join(results_dir, "000_dag")
         os.makedirs(dag_dir, exist_ok=True)
-        os.system(
-            f'snakemake --rulegraph --configfile {config_yaml} | '
-            f'dot -Tpng '
-            f'-Grankdir=TB '       # top to bottom flow
-            f'-Gsplines=ortho '    # right-angle edges
-            f'> {dag_dir}/dag.png'
+        dag_png = os.path.join(dag_dir, "dag.png")
+        dag_cmd = (
+            f"snakemake --rulegraph --configfile {shlex.quote(config_yaml)} | "
+            f"dot -Tpng -Grankdir=TB -Gsplines=ortho > {shlex.quote(dag_png)}"
         )
+        dag_result = subprocess.run(dag_cmd, shell=True)
+        if dag_result.returncode != 0:
+            print(f"Warning: failed to render DAG image (exit {dag_result.returncode})")
 
-    # run snakemake in the workflow dir
-    os.system(f'snakemake --use-conda --configfile {config_yaml} --cores {cores} --forcerun render_quarto')
+    # run snakemake in the workflow dir; propagate its exit code so failures are
+    # visible to callers (CI, schedulers, the `docker run` exit status).
+    result = subprocess.run([
+        "snakemake",
+        "--use-conda",
+        "--configfile", config_yaml,
+        "--cores", str(cores),
+        "--forcerun", "render_quarto",
+    ])
+    if result.returncode != 0:
+        print(f"Error: snakemake failed with exit code {result.returncode}")
+        exit(result.returncode)
 
 
 

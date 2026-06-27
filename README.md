@@ -101,7 +101,6 @@ All inputs specified in the config YAML file (see
 | `exclude` | Path to the exclusions CSV (optional) |
 | `genome_dir` | Path to the directory containing exactly one FASTA and one GTF |
 | `filter.min_count` / `filter.min_samples` | Low-count gene filter thresholds |
-| `strandedness.subsample_reads` / `strandedness.threshold` | RSeQC strandedness inference: read pairs subsampled per sample, and the min fraction in one orientation to call the library stranded (optional; defaults `200000` / `0.8`) |
 | `cores` | Number of CPU cores for the pipeline |
 | `workflow_dir` | Path to the directory to write pipeline code (Snakefile + envs/rules/scripts) |
 | `results_dir` | Path to the directory to write output of each step |
@@ -123,8 +122,8 @@ KO_rep1,../reads/KO_rep1_R1.fastq.gz,../reads/KO_rep1_R2.fastq.gz
 ```
 
 An optional `strandedness` column lets you set a sample's library strandedness
-explicitly; valid values are `forward`, `reverse`, and `unstranded` (`none` is
-accepted as an alias for `unstranded`). Any sample left blank — or the whole
+explicitly; valid values are `forward`, `reverse`, and `unstranded`. Any sample
+left blank — or the whole
 column omitted — has its strandedness **inferred** with RSeQC
 `infer_experiment.py` (step 3), which aligns a subsample of the reads and reads
 out the orientation. The strandedness (given or inferred) is passed to RSEM

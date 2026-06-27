@@ -471,11 +471,13 @@ rule count_genes_detected:
         genes=expand(STEP_RSEM_DIR + "{sample}.genes.results", sample=SAMPLES),
     output:
         STEP_QC_REPORT_CARDS_DIR + "csv/genes_detected.csv",
+    params:
+        min_count=config["filter"]["min_count"],
     log:
         LOGS + Path(STEP_QC_REPORT_CARDS_DIR).name + "/genes_detected.log"
     shell:
         """
-        python {input.script} --out {output} {input.genes} &> {log}
+        python {input.script} --min-count {params.min_count} --out {output} {input.genes} &> {log}
         """
 
 rule create_qc_report_cards:
@@ -526,6 +528,14 @@ rule multiqc:
             STEP_QC_REPORT_CARDS_DIR + "picard/{sample}.rnaseq_metrics.txt",
             sample=SAMPLES,
         ),
+        # Only the RSeQC infer_experiment reports (not the whole strandedness
+        # dir, which also holds subsampled-alignment STAR logs that would show
+        # up as bogus alignment stats in MultiQC). Empty when no sample needs
+        # strandedness inference.
+        rseqc=expand(
+            STEP_STRANDEDNESS_DIR + "{sample}.infer_experiment.txt",
+            sample=NEED_INFER_STRANDEDNESS,
+        ),
         report_cards=STEP_QC_REPORT_CARDS_DIR + "report_cards.txt", # not used; only for linear DAG
     output:
         html=STEP_MULTIQC_DIR + "multiqc_report.html",
@@ -533,7 +543,6 @@ rule multiqc:
         scan_dirs=" ".join([
             STEP_FASTP_DIR,
             STEP_FASTQC_POST_TRIM_DIR,
-            STEP_STRANDEDNESS_DIR,
             STEP_RSEM_DIR,
             STEP_QC_REPORT_CARDS_DIR + "picard",
         ]),
@@ -548,7 +557,7 @@ rule multiqc:
             --force \
             --outdir {params.outdir} \
             --filename multiqc_report.html \
-            {params.scan_dirs} \
+            {params.scan_dirs} {input.rseqc} \
             &> {log}
         """
 
