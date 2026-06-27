@@ -964,6 +964,8 @@ rule prose:
     input:
         script="scripts/prose.py",
         versions=expand(STEP_VERSIONS_DIR + "{env}.txt", env=VERSION_ENVS),
+        strand_samplesheet=STEP_STRANDEDNESS_DIR + "samples.csv",
+        input_samplesheet=SAMPLESHEET_CSV_PATH,
         gsea=expand(STEP_GSEA_DIR + "{contrast}.csv", contrast=CONTRAST_NAMES), # not used; only for linear DAG
     output:
         STEP_PROSE_DIR + "methods.md",
@@ -985,6 +987,8 @@ rule prose:
             --min-samples {params.min_samples} \
             --fasta {params.fasta} \
             --gtf {params.gtf} \
+            --strandedness-samplesheet {input.strand_samplesheet} \
+            --samples {input.input_samplesheet} \
             --out {output} \
             &> {log}
         """

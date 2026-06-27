@@ -2,6 +2,7 @@ import argparse
 import csv
 import os
 import re
+from collections import Counter
 
 _tool_to_version = dict()
 
@@ -15,13 +16,21 @@ def main():
     p.add_argument("--min-samples", required=True)
     p.add_argument("--fasta", required=True)
     p.add_argument("--gtf", required=True)
+    p.add_argument("--strandedness-samplesheet", required=True,
+                   help="samples.csv with the strandedness column populated "
+                        "(003_strandedness/samples.csv)")
+    p.add_argument("--samples", required=True,
+                   help="the original input samples.csv, used to tell which "
+                        "strandedness values were inferred vs. user-specified")
     p.add_argument("--out", required=True, help="output methods markdown file")
     args = p.parse_args()
 
     parse_tool_versions(args.versions_dir)
     dropped_samples_by_reason = read_exclusions_csv(args.exclude)
+    final, inferred = read_strandedness(args.strandedness_samplesheet, args.samples)
+    strand_clause = strandedness_clause(final, inferred)
     paragraph = render_paragraph(dropped_samples_by_reason, args.min_count, args.min_samples,
-                                 args.fasta, args.gtf)
+                                 args.fasta, args.gtf, strand_clause)
     references = render_references()
 
     os.makedirs(os.path.dirname(args.out) or ".", exist_ok=True)
@@ -77,13 +86,74 @@ def read_exclusions_csv(path):
                 dropped_samples_by_reason.setdefault(reason, []).append(sample)
     return dropped_samples_by_reason
 
-def render_paragraph(dropped_samples_by_reason: dict, min_count: int, min_samples: int, fasta: str, gtf: str):
+def read_strandedness(populated_path, input_path):
+    """Per-sample final strandedness and whether each value was RSeQC-inferred.
+
+    Returns (final, inferred):
+      final[sample]    -> 'forward' / 'reverse' / 'unstranded' (handed to RSEM)
+      inferred[sample] -> True if RSeQC inferred it (i.e. it was blank in the
+                          original input sample sheet)
+    """
+    final = {}
+    with open(populated_path, newline="") as fh:
+        for row in csv.DictReader(fh):
+            final[row["sample"]] = (row.get("strandedness") or "").strip().lower()
+
+    provided = {}
+    with open(input_path, newline="") as fh:
+        reader = csv.DictReader(fh)
+        has_col = bool(reader.fieldnames) and "strandedness" in reader.fieldnames
+        for row in reader:
+            value = (row.get("strandedness") or "").strip().lower() if has_col else ""
+            provided[row["sample"]] = value
+
+    inferred = {s: provided.get(s, "") == "" for s in final}
+    return final, inferred
+
+
+def strandedness_clause(final: dict, inferred: dict):
+    """A clause describing the strandedness handed to RSEM, e.g.
+    'using reverse strandedness as determined by RSeQC infer_experiment.py'.
+
+    When samples disagree, the per-sample breakdown is summarized instead of
+    claiming a single library-wide strandedness.
+    """
+    values = [v for v in final.values() if v]
+    if not values:
+        return ""
+
+    any_inferred = any(inferred.get(s) for s in final)
+    all_inferred = all(inferred.get(s) for s in final)
+    if all_inferred:
+        provenance = " as determined by RSeQC infer_experiment.py"
+    elif any_inferred:
+        provenance = (" as specified in the sample sheet, or determined by RSeQC "
+                      "infer_experiment.py where unspecified")
+    else:
+        provenance = " as specified in the sample sheet"
+
+    distinct = sorted(set(values))
+    if len(distinct) == 1:
+        value = distinct[0]
+        base = ("treating the libraries as unstranded" if value == "unstranded"
+                else f"using {value} strandedness")
+        return base + provenance
+
+    # Mixed strandedness across samples: summarize the per-sample breakdown.
+    counts = Counter(values)
+    parts = [
+        f"{counts[value]} {'unstranded' if value == 'unstranded' else value + '-stranded'}"
+        for value in ("forward", "reverse", "unstranded") if counts.get(value)
+    ]
+    return f"using per-sample library strandedness ({', '.join(parts)}){provenance}"
+
+
+def render_paragraph(dropped_samples_by_reason: dict, min_count: int, min_samples: int, fasta: str, gtf: str, strand_clause: str = ""):
     sentences = [
         _fastp(),
         _fastqc(),
-        _strandedness(),
         _alignment_reference(fasta, gtf),
-        _rsem(),
+        _rsem(strand_clause),
         _picard(),
         _multiqc(),
         _tximport(),
@@ -105,16 +175,18 @@ def _fastp():
 def _fastqc():
     return f"Read quality was assessed with FastQC (v{version('fastqc')})."
 
-def _strandedness():
-    return f"Library strandedness was inferred for each sample using RSeQC (v{version('rseqc')}) from a subsample of reads aligned to the reference and supplied to both RSEM and Picard."
-
 def _alignment_reference(fasta: str, gtf: str):
     fasta = os.path.basename(fasta)
     gtf = os.path.basename(gtf)
     return f"The alignment reference was prepared with RSEM using the [[FASTA goes here, e.g. GRCh38 DNA primary assembly; raw filename was {fasta}]] FASTA and the [[GTF goes here, e.g. Ensembl GRCh38.111; raw filename was {gtf}]] GTF annotation."
 
-def _rsem():
-    return f"Trimmed reads were aligned to the reference and quantified at the gene level using RSEM (v{version('rsem')}) with STAR (v{version('star')}) in paired-end mode."
+def _rsem(strand_clause: str = ""):
+    sentence = (f"Trimmed reads were aligned to the reference and quantified at the "
+                f"gene level using RSEM (v{version('rsem')}) with STAR "
+                f"(v{version('star')}) in paired-end mode")
+    if strand_clause:
+        sentence += ", " + strand_clause
+    return sentence + "."
 
 def _picard():
     return f"Post-alignment RNA-seq metrics, including ribosomal, exonic, intronic and intergenic rates and 5'-to-3' transcript coverage bias, were collected with Picard CollectRnaSeqMetrics (v{version('picard')})."
