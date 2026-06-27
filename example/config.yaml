@@ -42,17 +42,6 @@ filter:
   min_count: 10
   min_samples: 3
 
-# Strandedness inference (RSeQC infer_experiment.py). Each sample's library
-# strandedness is inferred from a subsample of aligned reads and passed to RSEM
-# (--strandedness) and Picard (STRAND_SPECIFICITY). Optional: remove this block
-# to use the defaults shown below.
-strandedness:
-  # Read pairs subsampled per sample for the inference alignment.
-  subsample_reads: 200000
-  # Minimum fraction of the explained reads in one orientation needed to call
-  # the library stranded (forward/reverse); otherwise it's treated as unstranded.
-  threshold: 0.8
-
 # Number of CPU cores to use for the pipeline.
 cores: 8
 

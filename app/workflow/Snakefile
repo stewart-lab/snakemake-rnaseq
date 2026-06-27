@@ -1,12 +1,11 @@
 from pathlib import Path
-from types import SimpleNamespace
 import os
 import sys
 from glob import glob
 import re
 import pandas as pd
 
-# read inputs from config
+# ********** read/print inputs from config **********
 CONFIG_YAML_PATH =     workflow.configfiles[0]
 CONFIG_DIR =           os.path.join(os.path.normpath(os.path.dirname(CONFIG_YAML_PATH)), "")
 RESULTS =              os.path.join(os.path.normpath(os.path.join(CONFIG_DIR, config["results_dir"])), "")
@@ -19,12 +18,6 @@ CONTRASTS_CSV_PATH =   os.path.normpath(os.path.join(CONFIG_DIR, config["contras
 EXCLUDE_CSV_PATH =     os.path.normpath(os.path.join(CONFIG_DIR, config["exclude"])) if config.get("exclude") else ""
 GENE_SETS_CSV_PATH =   os.path.normpath(os.path.join(CONFIG_DIR, config["gene_sets"]))
 CORES =                config["cores"]
-
-# Strandedness inference (RSeQC infer_experiment.py). Optional config block; the
-# defaults match the example config.
-STRANDEDNESS_CFG =     config.get("strandedness", {}) or {}
-STRANDEDNESS_SUBSAMPLE_READS = STRANDEDNESS_CFG.get("subsample_reads", 200000)
-STRANDEDNESS_THRESHOLD =       STRANDEDNESS_CFG.get("threshold", 0.8)
 
 # these are printed to stderr, not stdout, because creating the rulegraph/DAG .png
 # uses output from stdout, and these print statements create problems
@@ -41,7 +34,7 @@ print(f"  Exclude:         {EXCLUDE_CSV_PATH}", file=sys.stderr)
 print(f"  Gene sets:       {GENE_SETS_CSV_PATH}", file=sys.stderr)
 print("\n\n", file=sys.stderr)
 
-# output directories for each step in the pipeline
+# ********** output directories for each step in the pipeline **********
 STEP_FASTP_DIR =                          RESULTS + "001_fastp_trimmed/"
 STEP_FASTQC_POST_TRIM_DIR =               RESULTS + "002_fastqc/"
 STEP_STRANDEDNESS_DIR =                   RESULTS + "003_strandedness/"
@@ -60,14 +53,11 @@ STEP_GSEA_DIR =                           RESULTS + "015_gsea/"
 STEP_PROSE_DIR =                          RESULTS + "016_prose/"
 STEP_QUARTO_DIR =                         RESULTS + "reports/"
 
-# directories for built references
+# ********** directories for built references **********
 STEP_RSEM_REFERENCE_DIR =    GENOME_DIR + "star_reference/"
 STEP_PICARD_REFERENCE_DIR =  GENOME_DIR + "picard_reference/"
 
-
-
-
-
+# ********** read samples/contrasts **********
 samples_df = pd.read_csv(SAMPLESHEET_CSV_PATH).set_index("sample", drop=False)
 SAMPLES = samples_df["sample"].tolist()
 
@@ -76,19 +66,16 @@ CONTRAST_NAMES = [
     f"{row.treatment}_vs_{row.control}"
     for row in CONTRASTS.itertuples()
 ]
-# DESeq2 outputs that get converted to gene symbols (everything but size factors).
-DESEQ_SYMBOL_FILES = ["normalized_counts"] + CONTRAST_NAMES
-# Unique control conditions; each gets its own PCA (control + its treatments).
 CONTROL_CONDITIONS = sorted(CONTRASTS["control"].unique().tolist())
 
-# Gene sets for GSVA: each row of gene_sets.csv points to a GMT file.
+# ********** DESeq2 helper **********
+DESEQ_SYMBOL_FILES = ["normalized_counts"] + CONTRAST_NAMES
+
+# ********** gene sets **********
 GENE_SETS = pd.read_csv(GENE_SETS_CSV_PATH)
 GMT_FILES = GENE_SETS["gmt"].tolist() if "gmt" in GENE_SETS.columns else GENE_SETS.iloc[:, 0].tolist()
 
-EXCLUDE = pd.read_csv(EXCLUDE_CSV_PATH) if config.get("exclude") else pd.DataFrame(columns=["sample", "reason"])
-
-
-
+# ********** genome info **********
 # The reference FASTA and GTF are auto-detected from the genome_dir, which must
 # contain exactly one FASTA (.fa/.fasta/.fna) and exactly one GTF (.gtf).
 def _get_reference_file(directory, extensions, label):
@@ -107,87 +94,72 @@ def _get_reference_file(directory, extensions, label):
 GENOME_FASTA = _get_reference_file(GENOME_DIR, (".fa", ".fasta", ".fna"), "FASTA (.fa/.fasta/.fna)")
 GTF = _get_reference_file(GENOME_DIR, (".gtf",), "GTF (.gtf)")
 
-# Conda envs whose tools report a version for the methods paragraph. Each gets a
-# `versions_<env>` rule that runs the tool's own --version inside that env.
+# ********** tool versions **********
 VERSION_ENVS = [
     "fastp", "fastqc", "rseqc", "multiqc", "rsem", "star", "picard", "tximport",
     "deseq2", "gsva", "limma", "fgsea"
 ]
 
-# discover Quarto .qmd docs (none if reports_dir is unset)
+# ********** Quarto reports **********
 QMD_FILES = glob(os.path.join(REPORTS_DIR, "**", "*.qmd"), recursive=True) if REPORTS_DIR else []
 QUARTO_HTML_FILES = [STEP_QUARTO_DIR + os.path.basename(os.path.dirname(f)) + "/" + os.path.splitext(os.path.basename(f))[0] + ".html" for f in QMD_FILES]
 
+# ********** helper functions to get R1/R2 FASTQ files **********
 def get_r1(wildcards):
     return os.path.normpath(os.path.join(CONFIG_DIR, samples_df.loc[wildcards.sample, "r1"]))
 
 def get_r2(wildcards):
     return os.path.normpath(os.path.join(CONFIG_DIR, samples_df.loc[wildcards.sample, "r2"]))
 
-# Canonical strandedness values accepted in the (optional) samples.csv
-# "strandedness" column. "none" is accepted as an alias for "unstranded".
-STRANDEDNESS_VALUES = {"forward", "reverse", "unstranded"}
+# ********** sample strandedness **********
+if "strandedness" not in samples_df.columns:
+    samples_df["strandedness"] = pd.NA
 
-def get_strandedness(wildcards):
-    """User-specified strandedness for a sample from the optional samples.csv
-    'strandedness' column, normalized to forward/reverse/unstranded. Returns ""
-    when the column is absent or the cell is blank, meaning the strandedness is
-    to be inferred with RSeQC. Parallels get_r1/get_r2."""
-    if "strandedness" not in samples_df.columns:
-        return ""
-    value = samples_df.loc[wildcards.sample, "strandedness"]
-    if pd.isna(value):
-        return ""
-    value = str(value).strip().lower()
-    if not value:
-        return ""
-    if value == "none":
-        value = "unstranded"
-    if value not in STRANDEDNESS_VALUES:
-        raise ValueError(
-            f"Invalid strandedness '{value}' for sample '{wildcards.sample}' in "
-            f"{SAMPLESHEET_CSV_PATH}; expected one of "
-            f"{sorted(STRANDEDNESS_VALUES)} or 'none', or leave blank to infer."
-        )
-    return value
+def needs_strandedness_inference(sample):
+    val = samples_df.loc[sample, "strandedness"]
+    val = "" if pd.isna(val) else val
+    val = str(val)
 
-def _strandedness_of(sample):
-    """get_strandedness for a bare sample name (not a wildcards object)."""
-    return get_strandedness(SimpleNamespace(sample=sample))
+    if val not in {"forward", "reverse", "unstranded", ""}:
+        raise ValueError(f"Invalid strandedness '{val}'. Options are 'forward', 'reverse', 'unstranded', or leave empty to infer.")
 
-def get_strand_call_file(wildcards):
-    """The inferred-strandedness call file for a sample, or [] when the sample's
-    strandedness is given explicitly (so no inference / alignment is needed)."""
-    if _strandedness_of(wildcards.sample):
-        return []
-    return STEP_STRANDEDNESS_DIR + f"{wildcards.sample}.strandedness.txt"
+    return val == ""
 
-def get_inferred_call_files(wildcards=None):
-    """Call files for every sample whose strandedness is inferred."""
-    return [
-        STEP_STRANDEDNESS_DIR + f"{sample}.strandedness.txt"
-        for sample in SAMPLES
-        if not _strandedness_of(sample)
-    ]
+def get_strandedness(sample, tool: str):
+    sample = str(sample)
+    stranded_samplesheet = STEP_STRANDEDNESS_DIR + "samples.csv"
+    samples_with_strandedness_df = (pd.read_csv(stranded_samplesheet).set_index("sample", drop=False))
+    strandedness = str(samples_with_strandedness_df.loc[sample, "strandedness"])
 
-def get_inferred_report_files(wildcards=None):
-    """infer_experiment.py reports for every sample whose strandedness is
-    inferred (for MultiQC; samples with an explicit strandedness have none)."""
-    return [
-        STEP_STRANDEDNESS_DIR + f"{sample}.infer_experiment.txt"
-        for sample in SAMPLES
-        if not _strandedness_of(sample)
-    ]
+    rsem_strandedness_dict = {"forward": "forward", "reverse": "reverse", "unstranded": "none"}
+    picard_strandedness_dict = {"forward": "SECOND_READ_TRANSCRIPTION_STRAND", "reverse": "FIRST_READ_TRANSCRIPTION_STRAND", "unstranded": "NONE"}
+
+    if tool == "rsem":
+        return rsem_strandedness_dict[strandedness]
+    elif tool == "picard":
+        return picard_strandedness_dict[strandedness]
+    else:
+        raise ValueError(f"Unknown tool '{tool}'")
+
+KNOWN_STRANDEDNESS = [s for s in samples_df["sample"] if not needs_strandedness_inference(s)]
+NEED_INFER_STRANDEDNESS = [s for s in samples_df["sample"] if needs_strandedness_inference(s)]
+
+# ********** exluded (dropped) samples **********
+EXCLUDE = pd.read_csv(EXCLUDE_CSV_PATH) if config.get("exclude") else pd.DataFrame(columns=["sample", "reason"])
 
 def get_excluded_samples():
     """All samples listed in the exclude table, de-duplicated."""
     return EXCLUDE["sample"].dropna().astype(str).drop_duplicates().tolist()
 
+
+
+
+############# rule all #############
 rule all:
     input:
-        STEP_STRANDEDNESS_DIR + "samples.csv",
         STEP_PROSE_DIR + "methods.md",
         QUARTO_HTML_FILES,
+
 
 ############# Step 1: Fastp trimming #############
 # trimmed .fastq are temporary and are deleted after RSEM has run
@@ -245,23 +217,15 @@ rule fastqc:
         fastqc -o {params.outdir} --threads {threads} {input.r1} {input.r2} &> {log}
         """
 
-############# Step 3: Strandedness inference (RSeQC) #############
-# Each sample's library strandedness is passed to RSEM (--strandedness) and
-# Picard (STRAND_SPECIFICITY). A sample's strandedness can be set explicitly in
-# the optional samples.csv "strandedness" column; any sample left blank is
-# inferred here. Because RSEM aligns and quantifies in one step, its BAM can't
-# be reused to set its own strandedness; instead a subsample of the trimmed
-# reads is aligned with STAR against the already-built index, and RSeQC
-# infer_experiment.py calls the strandedness from that small BAM. The resolved
-# strandedness for every sample is written back out to a populated samples.csv.
+############# Step 3: RSeQC infer strandedness #############
 
-# Gene-model BED12 that infer_experiment.py compares read orientations against.
-rule rseqc_reference_bed:
+# Make a .bed for infer_experiment.py
+rule create_bed_for_rseqc:
     input:
         gtf=GTF,
     output:
         bed=STEP_STRANDEDNESS_DIR + "reference.bed",
-        genepred=temp(STEP_STRANDEDNESS_DIR + "reference.genePred"),
+        genepred=STEP_STRANDEDNESS_DIR + "reference.genePred",
     conda:
         "envs/rseqc.yml"
     log:
@@ -272,88 +236,74 @@ rule rseqc_reference_bed:
         genePredToBed {output.genepred} {output.bed} 2>> {log}
         """
 
-# Align a subsample of the trimmed reads to get a small BAM for strand inference.
-rule strand_subsample_align:
+# writes strandedness info for samples with user-provided strandedness
+rule write_known_strandedness:
+    output:
+        strand=STEP_STRANDEDNESS_DIR + "{sample}.strandedness.txt",
+    wildcard_constraints:
+        sample="|".join(re.escape(s) for s in KNOWN_STRANDEDNESS) or r"(?!)",
+    params:
+        value=lambda wc: str(samples_df.loc[wc.sample, "strandedness"]).strip(),
+    shell:
+        "printf '%s\\n' {params.value:q} > {output.strand}"
+
+# infers strandedness info for samples without user-provided strandedness
+rule rseqc_infer_strandedness:
     input:
         r1=STEP_FASTP_DIR + "{sample}_R1.fastq",
         r2=STEP_FASTP_DIR + "{sample}_R2.fastq",
-        grp=STEP_RSEM_REFERENCE_DIR + "star_reference.grp",
-        sa_index=STEP_RSEM_REFERENCE_DIR + "SAindex",
-    output:
-        bam=temp(STEP_STRANDEDNESS_DIR + "{sample}.subsample.bam"),
-        bai=temp(STEP_STRANDEDNESS_DIR + "{sample}.subsample.bam.bai"),
-    params:
-        genome_dir=STEP_RSEM_REFERENCE_DIR,
-        n_reads=STRANDEDNESS_SUBSAMPLE_READS,
-        prefix=STEP_STRANDEDNESS_DIR + "{sample}.",
-        outdir=STEP_STRANDEDNESS_DIR,
-    threads:
-        CORES
-    conda:
-        "envs/rsem.yml"
-    log:
-        LOGS + Path(STEP_STRANDEDNESS_DIR).name + "/{sample}.subsample_align.log"
-    shell:
-        """
-        mkdir -p {params.outdir}
-
-        # Subsample the first N read pairs (4 lines per read) of the trimmed FASTQs.
-        head -n $(( {params.n_reads} * 4 )) {input.r1} > {params.prefix}sub_R1.fastq
-        head -n $(( {params.n_reads} * 4 )) {input.r2} > {params.prefix}sub_R2.fastq
-
-        STAR \
-            --runThreadN {threads} \
-            --genomeDir {params.genome_dir} \
-            --readFilesIn {params.prefix}sub_R1.fastq {params.prefix}sub_R2.fastq \
-            --outSAMtype BAM SortedByCoordinate \
-            --outFileNamePrefix {params.prefix} \
-            &> {log}
-
-        mv {params.prefix}Aligned.sortedByCoord.out.bam {output.bam}
-        samtools index {output.bam} >> {log} 2>&1
-
-        # tidy up STAR's auxiliary outputs and the temporary subsampled FASTQs
-        rm -f {params.prefix}sub_R1.fastq {params.prefix}sub_R2.fastq \
-              {params.prefix}Log.out {params.prefix}Log.progress.out \
-              {params.prefix}Log.final.out {params.prefix}SJ.out.tab
-        rm -rf {params.prefix}_STARtmp
-        """
-
-# Call strandedness from the subsample BAM. Writes the inferred call
-# (forward/reverse/unstranded) as a single line to {sample}.strandedness.txt.
-rule infer_strandedness:
-    input:
-        script="scripts/strandedness.py",
-        bam=STEP_STRANDEDNESS_DIR + "{sample}.subsample.bam",
-        bai=STEP_STRANDEDNESS_DIR + "{sample}.subsample.bam.bai",
         bed=STEP_STRANDEDNESS_DIR + "reference.bed",
+        script="scripts/parse_infer_strandedness.py",
     output:
-        report=STEP_STRANDEDNESS_DIR + "{sample}.infer_experiment.txt",
         strand=STEP_STRANDEDNESS_DIR + "{sample}.strandedness.txt",
-    params:
-        threshold=STRANDEDNESS_THRESHOLD,
+        report=STEP_STRANDEDNESS_DIR + "{sample}.infer_experiment.txt",
+    wildcard_constraints:
+        sample="|".join(re.escape(s) for s in NEED_INFER_STRANDEDNESS) or r"(?!)",
     conda:
         "envs/rseqc.yml"
     log:
-        LOGS + Path(STEP_STRANDEDNESS_DIR).name + "/{sample}.infer_experiment.log"
+        LOGS + Path(STEP_STRANDEDNESS_DIR).name + "/{sample}.subsample_align.log"
+    threads:
+        CORES
+    params:
+        genome_dir=STEP_RSEM_REFERENCE_DIR,
+        prefix=STEP_STRANDEDNESS_DIR + "infer_{sample}/{sample}.",
+        n_reads=200000,
+        threshold=0.8,
     shell:
         """
-        infer_experiment.py -i {input.bam} -r {input.bed} > {output.report} 2> {log}
+        mkdir -p $(dirname {params.prefix})
 
-        python {input.script} \
-            --infer-experiment {output.report} \
-            --threshold {params.threshold} \
-            --out {output.strand} \
-            >> {log} 2>&1
+        # create subsampled FASTQs
+        head -n $(( {params.n_reads} * 4 )) {input.r1} > {params.prefix}sub_R1.fastq
+        head -n $(( {params.n_reads} * 4 )) {input.r2} > {params.prefix}sub_R2.fastq
+
+        STAR --runThreadN {threads} \
+             --genomeDir {params.genome_dir} \
+             --readFilesIn {params.prefix}sub_R1.fastq {params.prefix}sub_R2.fastq \
+             --outSAMtype BAM SortedByCoordinate \
+             --outFileNamePrefix {params.prefix} > {log} 2>&1
+
+        samtools index {params.prefix}Aligned.sortedByCoord.out.bam >> {log} 2>&1
+
+        # delete subsampled FASTQs
+        rm -f {params.prefix}sub_R1.fastq {params.prefix}sub_R2.fastq
+
+        infer_experiment.py -i {params.prefix}Aligned.sortedByCoord.out.bam \
+            -r {input.bed} > {output.report} 2>> {log}
+
+        python {input.script} --infer-experiment {output.report} --threshold {params.threshold} --out {output.strand}
         """
 
-# Write a copy of the samples.csv with the "strandedness" column fully populated:
-# explicit values are passed through, blank ones are filled with the inferred call.
+# Make a new samplesheet with the "strandedness" column populated
 rule write_strandedness_samplesheet:
     input:
         script="scripts/write_strandedness_samplesheet.py",
         samples=SAMPLESHEET_CSV_PATH,
-        calls=get_inferred_call_files,
+        calls=expand(
+            STEP_STRANDEDNESS_DIR + "{sample}.strandedness.txt",
+            sample=samples_df["sample"],
+        ),
     output:
         STEP_STRANDEDNESS_DIR + "samples.csv",
     params:
@@ -371,7 +321,7 @@ rule write_strandedness_samplesheet:
 
 ############# Step 4: RSEM expression quantification #############
 
-# Build RSEM reference
+# Build STAR/RSEM reference
 rule rsem_prepare_reference:
     input:
         fasta=GENOME_FASTA,
@@ -412,7 +362,7 @@ rule rsem_calculate_expression:
         r2=STEP_FASTP_DIR + "{sample}_R2.fastq",
         grp=STEP_RSEM_REFERENCE_DIR + "star_reference.grp",
         sa_index=STEP_RSEM_REFERENCE_DIR + "SAindex",
-        strand_call=get_strand_call_file,
+        stranded_samplesheet=STEP_STRANDEDNESS_DIR + "samples.csv",
     output:
         genes=STEP_RSEM_DIR + "{sample}.genes.results",
         isoforms=STEP_RSEM_DIR + "{sample}.isoforms.results",
@@ -422,7 +372,7 @@ rule rsem_calculate_expression:
         ref_prefix=STEP_RSEM_REFERENCE_DIR + "star_reference",
         out_prefix=STEP_RSEM_DIR + "{sample}",
         outdir=STEP_RSEM_DIR,
-        strandedness=get_strandedness,
+        strandedness=lambda wildcards: get_strandedness(wildcards.sample, tool="rsem"),
     threads:
         CORES
     conda:
@@ -434,22 +384,11 @@ rule rsem_calculate_expression:
         # check CPU architecture. STAR only works on avx2.
         bash scripts/check_star_cpu.sh &> {log}
 
-        # Use the explicit strandedness from samples.csv if given, otherwise the
-        # inferred call. Then translate to RSEM's --strandedness option.
-        STRANDEDNESS="{params.strandedness}"
-        if [ -z "$STRANDEDNESS" ]; then STRANDEDNESS=$(cat {input.strand_call}); fi
-        case "$STRANDEDNESS" in
-            forward)    RSEM_STRANDEDNESS=forward;;
-            reverse)    RSEM_STRANDEDNESS=reverse;;
-            unstranded) RSEM_STRANDEDNESS=none;;
-            *) echo "unexpected strandedness '$STRANDEDNESS'" >&2; exit 1;;
-        esac
-
         mkdir -p {params.outdir}
         rsem-calculate-expression \
             --star \
             --paired-end \
-            --strandedness $RSEM_STRANDEDNESS \
+            --strandedness {params.strandedness} \
             --num-threads {threads} \
             --star-output-genome-bam \
             --keep-intermediate-files \
@@ -506,34 +445,23 @@ rule picard_rna_metrics:
         bam=STEP_RSEM_DIR + "{sample}.genome.sorted.bam",
         refflat=STEP_PICARD_REFERENCE_DIR + "refFlat.txt",
         rrna=STEP_PICARD_REFERENCE_DIR + "rRNA.interval_list",
-        strand_call=get_strand_call_file,
+        strand=STEP_STRANDEDNESS_DIR + "samples.csv",
     output:
         rnaseq_metrics=STEP_QC_REPORT_CARDS_DIR + "picard/{sample}.rnaseq_metrics.txt",
     params:
-        strandedness=get_strandedness,
+        strandedness=lambda wildcards: get_strandedness(wildcards.sample, tool="picard"),
     conda:
         "envs/qc_report.yml"
     log:
         LOGS + Path(STEP_QC_REPORT_CARDS_DIR).name + "/{sample}.picard_metrics.log"
     shell:
         """
-        # Use the explicit strandedness from samples.csv if given, otherwise the
-        # inferred call. Then translate to Picard's STRAND_SPECIFICITY.
-        STRANDEDNESS="{params.strandedness}"
-        if [ -z "$STRANDEDNESS" ]; then STRANDEDNESS=$(cat {input.strand_call}); fi
-        case "$STRANDEDNESS" in
-            forward)    PICARD_STRAND=SECOND_READ_TRANSCRIPTION_STRAND;;
-            reverse)    PICARD_STRAND=FIRST_READ_TRANSCRIPTION_STRAND;;
-            unstranded) PICARD_STRAND=NONE;;
-            *) echo "unexpected strandedness '$STRANDEDNESS'" >&2; exit 1;;
-        esac
-
         picard CollectRnaSeqMetrics \
             I={input.bam} \
             O={output.rnaseq_metrics} \
             REF_FLAT={input.refflat} \
             RIBOSOMAL_INTERVALS={input.rrna} \
-            STRAND_SPECIFICITY=$PICARD_STRAND \
+            STRAND_SPECIFICITY={params.strandedness} \
             &> {log}
         """
 
@@ -598,7 +526,6 @@ rule multiqc:
             STEP_QC_REPORT_CARDS_DIR + "picard/{sample}.rnaseq_metrics.txt",
             sample=SAMPLES,
         ),
-        rseqc=get_inferred_report_files,
         report_cards=STEP_QC_REPORT_CARDS_DIR + "report_cards.txt", # not used; only for linear DAG
     output:
         html=STEP_MULTIQC_DIR + "multiqc_report.html",

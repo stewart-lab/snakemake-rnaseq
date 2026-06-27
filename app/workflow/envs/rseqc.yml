@@ -5,5 +5,7 @@ channels:
 dependencies:
   - python=3.12
   - rseqc=5.0.4
+  - samtools=1.21
+  - star=2.7.11b
   - ucsc-gtftogenepred=482
   - ucsc-genepredtobed=482

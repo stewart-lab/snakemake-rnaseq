@@ -106,7 +106,7 @@ def _fastqc():
     return f"Read quality was assessed with FastQC (v{version('fastqc')})."
 
 def _strandedness():
-    return f"Library strandedness was determined for each sample (taken from the sample sheet where specified, otherwise inferred with RSeQC infer_experiment.py (v{version('rseqc')}) from a subsample of reads aligned to the reference) and supplied to both RSEM and Picard."
+    return f"Library strandedness was inferred for each sample using RSeQC (v{version('rseqc')}) from a subsample of reads aligned to the reference and supplied to both RSEM and Picard."
 
 def _alignment_reference(fasta: str, gtf: str):
     fasta = os.path.basename(fasta)

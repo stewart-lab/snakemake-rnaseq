@@ -19,7 +19,7 @@ differential expression → gene-set analysis (GSVA **and** GSEA) → reporting.
 | 2 | `002_fastqc` | FastQC | QC of the trimmed reads |
 | – | `<genome_dir>/star_reference` | RSEM + STAR | Build the alignment/quantification index |
 | – | `<genome_dir>/picard_reference` | Picard | Build the sequence dictionary, refFlat, and rRNA intervals |
-| 3 | `003_strandedness` | RSeQC | Per-sample library strandedness — taken from `samples.csv` where given, else inferred (subsample STAR align → `infer_experiment.py`); writes a populated `samples.csv` and feeds RSEM + Picard |
+| 3 | `003_strandedness` | RSeQC | Strandedness inference (or provided by `samples.csv`) |
 | 4 | `004_rsem` | RSEM + STAR | Align and quantify gene-level expression |
 | 5 | `005_qc_reports` | Picard + RSEM/STAR | Per-sample QC "report card" (mapping %, reads, genes detected, rRNA, exonic, intergenic, 5'/3' bias) |
 | 6 | `006_multiqc` | MultiQC | Aggregate fastp/FastQC/RSeQC/RSEM/Picard QC into one report |
