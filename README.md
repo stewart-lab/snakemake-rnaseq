@@ -51,7 +51,7 @@ Snakemake will create the conda environments needed for each step in the pipelin
 
 docker run --rm \
   -v /home/myname/projects:/home/myname/projects \
-  snakemake-rnaseq:1.0.0 \
+  snakemake-rnaseq:1.0.2 \
   /home/myname/projects/myproject/config/config.yaml
 ```
 
@@ -71,9 +71,9 @@ myproject/
 ├── resources/              # pipeline inputs
 │   ├── reads/              #   raw FASTQs referenced by samples.csv
 │   ├── reference/          #   genome_dir: exactly one FASTA + one GTF
-│   └── gene_sets/          #   .gmt files referenced by gene_sets.csv
-├── reports/                # reports_dir: your Quarto reports, one folder each
+│   ├── reports/            #   reports_dir: your Quarto reports, one folder each
 │   └── summary/summary.qmd
+│   └── gene_sets/          #   .gmt files referenced by gene_sets.csv
 ├── workflow/               # workflow_dir: pipeline code (Snakefile + envs/rules/scripts)
 ├── results/                # results_dir: pipeline outputs
 └── logs/                   # logs_dir: pipeline logs
