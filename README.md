@@ -72,7 +72,7 @@ myproject/
 │   ├── reads/              #   raw FASTQs referenced by samples.csv
 │   ├── reference/          #   genome_dir: exactly one FASTA + one GTF
 │   ├── reports/            #   reports_dir: your Quarto reports, one folder each
-│   └── summary/summary.qmd
+│   │   └── summary/summary.qmd
 │   └── gene_sets/          #   .gmt files referenced by gene_sets.csv
 ├── workflow/               # workflow_dir: pipeline code (Snakefile + envs/rules/scripts)
 ├── results/                # results_dir: pipeline outputs
