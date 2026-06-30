@@ -13,6 +13,7 @@ which is neutral: it does not trigger a drop and is not flagged).
 import argparse
 import csv
 import os
+from math import log2
 
 # --- four-tier grade scale ---
 # Tiers, worst to best: FAIL < WARN < OK < GOOD.
@@ -32,6 +33,18 @@ LIGHT = '░'
 SECTION = 10                 # chars per section
 BAR_WIDTH = SECTION * 3      # warn | ok | good
 
+
+def _bias_distance(v):
+    """Symmetric distance of a 5'/3' ratio from the ideal 1.0: abs(log2(v)).
+
+    A ratio and its reciprocal map to the same distance, so over- and
+    under-coverage of the 5' end are penalized equally. A non-positive or
+    missing ratio is treated as maximally biased.
+    """
+    if v is None or v <= 0:
+        return float("inf")
+    return abs(log2(v))
+
 # Each metric defines its zone edges as 4 points along the bar, ordered
 # from the "worst" end to the "best" end:
 #   edges = (fail_edge, warn|ok, ok|good, best)
@@ -42,18 +55,28 @@ BAR_WIDTH = SECTION * 3      # warn | ok | good
 # FAIL and draws an empty bar. The three bands above it map 1:1 to the three
 # bar sections, so the section where the fill ends is the metric's tier.
 #
-# key, label, unit, edges, critical_fn
+# grade_fn (last field) optionally transforms the raw value into the quantity
+# that is actually graded and drawn. The displayed number column still shows
+# the raw value; only grading/bar use the transform. It exists for metrics that
+# are not monotonic in the raw value (see 5'/3' bias below). None = identity.
+#
 # Note: the genes_detected edges are placeholders; they are overridden per run
 # from the dataset (see main()).
-# key, label, unit, fmt, edges, critical_fn
+# key, label, unit, fmt, edges, critical_fn, grade_fn
 METRICS = [
-    ("uniquely_mapped_pct", "Uniquely mapped", "%", "{:>6.0f}", (70, 80, 90, 100),    lambda v: v < 70),
-    ("total_reads_M",       "Total reads",     "M", "{:>6.1f}", (5, 10, 20, 30),       lambda v: v < 5),
-    ("genes_detected",      "Genes detected",  "k", "{:>6.1f}", (0, 0, 0, 0),          lambda v: False),
-    ("rrna_pct",            "rRNA",            "%", "{:>6.0f}", (15, 10, 5, 0),         lambda v: v > 30),
-    ("exonic_pct",          "Exonic",          "%", "{:>6.0f}", (55, 70, 85, 100),     lambda v: v < 55),
-    ("intergenic_pct",      "Intergenic",      "%", "{:>6.0f}", (15, 10, 5, 0),        lambda v: v > 30),
-    ("median_5p_3p_bias",   "5'/3' bias",      " ", "{:>6.2f}", (0.4, 0.5, 0.8, 1.0),  lambda v: v < 0.4),
+    ("uniquely_mapped_pct", "Uniquely mapped", "%", "{:>6.0f}", (70, 80, 90, 100),    lambda v: v < 70, None),
+    ("total_reads_M",       "Total reads",     "M", "{:>6.1f}", (5, 10, 20, 30),       lambda v: v < 5,  None),
+    ("genes_detected",      "Genes detected",  "k", "{:>6.1f}", (0, 0, 0, 0),          lambda v: False,  None),
+    ("rrna_pct",            "rRNA",            "%", "{:>6.0f}", (15, 10, 5, 0),         lambda v: v > 30, None),
+    ("exonic_pct",          "Exonic",          "%", "{:>6.0f}", (55, 70, 85, 100),     lambda v: v < 55, None),
+    ("intergenic_pct",      "Intergenic",      "%", "{:>6.0f}", (15, 10, 5, 0),        lambda v: v > 30, None),
+    # 5'/3' bias is a ratio: a value and its reciprocal are equally bad (a 5'
+    # enrichment of 2.0 == a 3' enrichment of 0.5). It is graded on the symmetric
+    # log2 distance from the ideal 1.0, so both over- and under-coverage of the 5'
+    # end are penalized. Edges are in that distance space (lower = better):
+    #   >1.32 fail (raw <0.40 or >2.50), >1.00 warn (<0.50 or >2.00),
+    #   >0.30 ok   (<0.81 or >1.23),     else good (0.81-1.23).
+    ("median_5p_3p_bias",   "5'/3' bias",      " ", "{:>6.2f}", (1.32, 1.0, 0.3, 0.0), lambda v: _bias_distance(v) > 1.32, _bias_distance),
 ]
 
 # Tier -> bar section index (0 = leftmost filled section). FAIL has no section.
@@ -118,7 +141,7 @@ def report_card(sample_id, m, edges_override=None):
 
     fail_reasons = []
 
-    for key, label, unit, fmt, edges, crit_fn in METRICS:
+    for key, label, unit, fmt, edges, crit_fn, grade_fn in METRICS:
         edges = edges_override.get(key, edges)
         val = m.get(key)
         if val is None:
@@ -126,12 +149,13 @@ def report_card(sample_id, m, edges_override=None):
             shown = "   n/a"
             bar = _empty_bar()
         else:
-            grade = grade_from_edges(val, edges)
+            gval = grade_fn(val) if grade_fn else val
+            grade = grade_from_edges(gval, edges)
             crit = bool(crit_fn(val))
             if crit:
                 grade = FAIL
             shown = fmt.format(val)
-            bar = make_zone_bar(val, edges, grade)
+            bar = make_zone_bar(gval, edges, grade)
 
         if grade == FAIL:
             tag = " [critical]" if crit else ""
